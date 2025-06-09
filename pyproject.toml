@@ -1,0 +1,12 @@
+[project]
+name = "arxiv-rec-finder"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "feedparser>=6.0.11",
+    "ollama>=0.5.1",
+    "pygithub>=2.6.1",
+    "pyyaml>=6.0.2",
+]

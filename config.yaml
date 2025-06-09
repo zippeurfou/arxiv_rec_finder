@@ -1,0 +1,18 @@
+search_query: "recommender OR ranking OR retrieval OR personalization"
+arxiv_category: "cs.IR OR cs.LG OR cs.AI OR stat.ML"
+
+tech_domains:
+  - google.com
+  - bing.com
+  - apple.com
+  - amazon.com
+  - netflix.com
+  - microsoft.com
+  - bytedance.com
+  - adobe.com
+  - huggingface.co
+  - nvidia.com
+
+github:
+  repo: zippeurfou/arxiv_rec_finder
+
