@@ -1,4 +1,4 @@
-search_query: "recommender OR ranking OR retrieval OR personalization"
+search_query: "recommender OR ranking OR retrieval OR personalization OR recommendation"
 arxiv_category: "cs.IR OR cs.LG OR cs.AI OR stat.ML"
 
 tech_domains:
@@ -10,9 +10,40 @@ tech_domains:
   - microsoft.com
   - bytedance.com
   - adobe.com
-  - huggingface.co
   - nvidia.com
+  - meta.com
+  - tencent.com
+  - baidu.com
+  - alibaba.com
+  - spotify.com
+  - doordash.com
+  - airbnb.com
+  - twitter.com
+  - linkedin.com
+  - pinterest.com
+  - snap.com
+  - reddit.com
+  - hulu.com
+  - yandex.com
+  - huawei.com
+  - youtube.com
+  - alibaba-inc.com
+  - alphabet.com
+  - meituan.com
+  - tik-tok.com
+  - taobao.com
+  - jd.com
+  - tmall.com
+  - wechat.com
+  - shopify.com
+  - instagram.com
+  - instacart.com
+  - outbrain.com
+  - quora.com
+  - bbc.com
+  - walmart.com
+  - otto.de
+  - zalando.de
 
 github:
   repo: zippeurfou/arxiv_rec_finder
-

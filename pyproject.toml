@@ -10,3 +10,8 @@ dependencies = [
     "pygithub>=2.6.1",
     "pyyaml>=6.0.2",
 ]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.401",
+]

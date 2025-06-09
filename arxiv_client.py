@@ -3,7 +3,7 @@ from urllib.parse import quote_plus
 import feedparser
 
 
-def get_recent_arxiv_papers(query, category, max_results=100):
+def get_recent_arxiv_papers(query, category, max_results=1000):
     base_url = "http://export.arxiv.org/api/query?"
     safe_query = quote_plus(query)  # encode "a b" → "a+b"
     safe_cat = quote_plus(category)
