@@ -45,5 +45,9 @@ tech_domains:
   - otto.de
   - zalando.de
 
+substack_username:
+  - "codingisfun"
+substack_limit: 5
+
 github:
   repo: zippeurfou/arxiv_rec_finder

@@ -1,23 +1,71 @@
-from github import Github
+# notifier.py
+import hashlib
+
+from github import Github, GithubException
 
 
-def create_issue(repo_name, token, entry, summary):
+def _color_for_label(name: str) -> str:
+    """
+    Deterministically turn `name` into a “nice” 6‑digit hex string.
+    We:
+      1. Compute MD5(name.encode("utf8"))
+      2. Take the first 3 bytes → R, G, B
+      3. Clamp each channel to [0x40, 0xE0] so it’s neither too dark nor too light.
+    """
+    digest = hashlib.md5(name.encode("utf8")).digest()
+    rgb = []
+    for b in digest[:3]:
+        # clamp to range [0x40, 0xE0] to avoid extremes
+        clamped = 0x40 + (b % (0xE0 - 0x40))
+        rgb.append(clamped)
+    return "{:02x}{:02x}{:02x}".format(*rgb)
+
+
+def _ensure_label(repo, label_name: str) -> None:
+    """
+    If a label with `label_name` doesn’t exist in `repo`, create it using a
+    deterministic color from `_color_for_label(label_name)`. If it does exist,
+    do nothing (we don’t touch its existing color).
+    """
+    try:
+        repo.get_label(label_name)
+    except GithubException as e:
+        if e.status == 404:
+            color = _color_for_label(label_name)
+            repo.create_label(name=label_name, color=color)
+        else:
+            raise
+
+
+def create_issue(repo_name: str, token: str, entry, summary: str):
+    """
+    1) For each label in [year] + entry.companies, ensure it exists (with a
+       deterministic color). 2) Create the issue.
+    """
     g = Github(token)
     repo = g.get_repo(repo_name)
-    arxiv_id = entry.id.split("/")[-1]
-    companies = ", ".join(entry.companies)
-    year = entry.published[:4]
-    title = entry.title
 
-    labels = [year] + entry.companies
-    issue_title = f"[arXiv {year}] {title} ({companies})"
+    # Build “year” and each company label
+    year = entry.published[:4]
+    companies = entry.companies or []
+    labels = [year] + companies
+
+    # 1) ensure each label exists (with a nice color)
+    for lbl in labels:
+        _ensure_label(repo, lbl)
+
+    # 2) construct issue text as before
+    title = entry.title
+    company_list = ", ".join(companies)
+    issue_title = f"[arXiv {year}] {title} ({company_list})"
     body = f"""🧠 **Title:** {title}
 
 📅 **Published:** {entry.published}
 🔗 **URL:** {entry.link}
-🧑‍💼 **Companies:** {companies}
+🧑‍💼 **Companies:** {company_list}
 
 📝 **Summary:**  
 {summary}
 """
+    # Now all labels definitely exist, so we can safely pass their names
     repo.create_issue(title=issue_title, body=body, labels=labels[:5])

@@ -14,7 +14,7 @@ def has_big_tech_author(entry, tech_domains):
                 return True
     # fallback: look in title/abstract
     text = (entry.title + " " + entry.summary).lower()
-    matches = [d.split(".")[0].capitalize() for d in tech_domains if d.split(".")[0] in text or d in text]
+    matches = [d.split(".")[0].capitalize() for d in tech_domains if f" {d.split(".")[0]} " in text or d in text]
     if matches:
         entry.companies = matches
         return True

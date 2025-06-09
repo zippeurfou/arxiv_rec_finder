@@ -9,9 +9,12 @@ dependencies = [
     "ollama>=0.5.1",
     "pygithub>=2.6.1",
     "pyyaml>=6.0.2",
+    "substack-api>=1.1.1",
 ]
 
 [dependency-groups]
 dev = [
+    "ipython>=9.3.0",
     "pyright>=1.1.401",
+    "substack-api>=1.1.1",
 ]
