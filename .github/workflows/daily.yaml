@@ -2,7 +2,7 @@ name: arxiv-bot-daily
 
 on:
   schedule:
-    - cron: "0 13 * * *" # Run daily at 1 PM UTC
+    - cron: "0 13 * * *"
   workflow_dispatch:
 
 permissions:
@@ -18,16 +18,23 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
 
-      - name: Install Python via uv
-        run: uv python install
-
       - name: Sync dependencies
         run: uv sync
 
-      - name: Pull Ollama model
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama server
         run: |
-          curl -fsSL https://ollama.com/install.sh | sh
-          ollama pull deepseek-r1:latest
+          ollama serve &
+          # Wait until Ollama is listing models (server ready)
+          until ollama list >/dev/null 2>&1; do
+            echo "Waiting for Ollama..."
+            sleep 1
+          done
+
+      - name: Pull deepseek model
+        run: ollama pull deepseek-r1:latest
 
       - name: Run bot
         env:
