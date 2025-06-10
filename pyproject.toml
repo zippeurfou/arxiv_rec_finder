@@ -13,6 +13,7 @@ dependencies = [
     "tqdm>=4.67.1",
     "pypdf2>=3.0.1",
     "requests>=2.32.4",
+    "cloudscraper>=1.2.71",
 ]
 
 [dependency-groups]

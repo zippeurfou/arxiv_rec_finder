@@ -3,6 +3,15 @@ import logging
 
 import feedparser
 import requests
+import cloudscraper
+
+_SCRAPER = cloudscraper.create_scraper(
+    browser={
+        'custom': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                  'AppleWebKit/537.36 (KHTML, like Gecko) '
+                  'Chrome/137.0.0.0 Safari/537.36'
+    }
+)
 
 
 def get_substack_domains(username):
@@ -122,7 +131,7 @@ def fetch_substack_posts(domain_url, limit=5):
     feed_url = f"{domain_url.rstrip('/')}/feed"
     logging.info(f"Feed URL: {feed_url}")
     try:
-        feed = feedparser.parse(feed_url)
+        feed = feedparser.parse(_SCRAPER.get(feed_url).text)
         if not feed.entries:
             logging.warning(f"Substack RSS feed empty or inaccessible: {feed_url}")
             logging.info(f"Feed content: {feed}")
