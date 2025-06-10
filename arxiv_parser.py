@@ -17,13 +17,17 @@ def download_pdf(arxiv_id):
     return BytesIO(response.content)
 
 
-def extract_text_from_pdf(pdf_stream):
+def extract_text_from_pdf(pdf_stream, max_pages=3):
     """
     Extract all text from the PDF using PyPDF2
     """
     reader = PdfReader(pdf_stream)
     all_text = ""
+    i = 0
     for page in reader.pages:
+        i += 1
+        if i >= max_pages:
+            break
         page_text = page.extract_text()
         if page_text:
             all_text += page_text + "\n"
@@ -71,12 +75,11 @@ def extract_emails_from_arxiv_pdf(arxiv_id):
     return emails
 
 
-# 🔍 Try it here
-# if __name__ == "__main__":
-#     arxiv_id = "2410.16780v2"
-#     arxiv_id = "2410.20642v1"
-#     arxiv_id = "2410.16823v1"
-#     arxiv_id = "2410.11150v1"
-#     arxiv_id = "2503.12733v2"
-#     emails = extract_emails_from_arxiv_pdf(arxiv_id)
-#     print(f"Found emails in arXiv paper {arxiv_id}:\n{emails}")
+if __name__ == "__main__":
+    arxiv_id = "2410.16780v2"
+    # arxiv_id = "2410.20642v1"
+    # arxiv_id = "2410.16823v1"
+    # arxiv_id = "2410.11150v1"
+    # arxiv_id = "2503.12733v2"
+    emails = extract_emails_from_arxiv_pdf(arxiv_id)
+    print(f"Found emails in arXiv paper {arxiv_id}:\n{emails}")

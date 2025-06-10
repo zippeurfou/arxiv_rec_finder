@@ -1,5 +1,6 @@
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 import yaml
@@ -59,13 +60,38 @@ def collect_new_arxiv_entries(config, seen_ids):
 
 def submit_arxiv_issues(entries, config, seen_ids, repo, token):
     """
-    For each entry, check if it has a big‐tech author. If so, summarize + create an issue.
-    Returns nothing, but logs each issue creation.
+    Check affiliations for entries in parallel, then for those with big-tech
+    authors, summarize sequentially and create issues.
     """
     tech_domains = config["tech_domains"]
 
+    # Phase 1: Check affiliations in parallel to identify valid entries
+    entries_to_check = [entry for entry in entries if entry.id not in seen_ids]
+    valid_entries = []
+
+    with ThreadPoolExecutor() as executor:
+        # Submit all tasks
+        tasks = [
+            (entry, executor.submit(has_big_tech_author, entry, tech_domains))
+            for entry in entries_to_check
+        ]
+
+        # Collect results
+        for entry, future in tqdm(
+            tasks,
+            desc="Checking affiliations",
+            unit="paper",
+            leave=False,
+        ):
+            try:
+                if future.result():
+                    valid_entries.append(entry)
+            except Exception as e:
+                logging.warning(f"Error checking affiliation for {entry.id}: {e}")
+
+    # Phase 2: Sequential summarization and issue creation
     for entry in tqdm(
-        entries,
+        valid_entries,
         desc="Processing new arXiv papers",
         unit="paper",
         leave=False,
@@ -73,10 +99,10 @@ def submit_arxiv_issues(entries, config, seen_ids, repo, token):
         if entry.id in seen_ids:
             continue
 
-        if has_big_tech_author(entry, tech_domains):
-            summary = summarize_with_ollama(entry.title, entry.summary)
-            create_issue(repo, token, entry, summary)
-            logging.info(f"✅ Issue for arXiv paper: {entry.title}")
+        # Summarize with Ollama sequentially to avoid overloading
+        summary = summarize_with_ollama(entry.title, entry.summary)
+        create_issue(repo, token, entry, summary)
+        logging.info(f"✅ Issue for arXiv paper: {entry.title}")
 
 
 def process_substack_users(config, seen_ids, repo, token):
@@ -134,7 +160,7 @@ def main():
         raise RuntimeError("GITHUB_TOKEN not set")
     repo = config["github"]["repo"]
 
-    # 1) Fetch all already‐seen URLs from GitHub issues
+    # 1) Fetch all already-seen URLs from GitHub issues
     seen_ids = load_seen_from_issues(repo, token)
 
     # 2) Collect new arXiv entries (skip ones already in seen_ids)
