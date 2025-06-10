@@ -1,16 +1,15 @@
 import datetime
 import logging
 
+import cloudscraper
 import feedparser
 import requests
-import cloudscraper
 
 _SCRAPER = cloudscraper.create_scraper(
-    browser={
-        'custom': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
-                  'AppleWebKit/537.36 (KHTML, like Gecko) '
-                  'Chrome/137.0.0.0 Safari/537.36'
-    }
+    interpreter="js2py",
+    delay=5,
+    debug=True,
+    enable_stealth=True,
 )
 
 
@@ -135,6 +134,25 @@ def fetch_substack_posts(domain_url, limit=5):
         if not feed.entries:
             logging.warning(f"Substack RSS feed empty or inaccessible: {feed_url}")
             logging.info(f"Feed content: {feed}")
+            logging.info(f"Let's brute force the feed URL: {feed_url}")
+            interpreters = ["nodejs", "native"]
+            for interpreter in interpreters:
+                try:
+                    scrapper = cloudscraper.create_scraper(
+                        interpreter=interpreter,
+                        delay=5,
+                        debug=True,
+                        enable_stealth=True,
+                    )
+                    feed = feedparser.parse(scrapper.get(feed_url).text)
+                    if feed.entries:
+                        logging.info(f"Successfully fetched feed with {interpreter}")
+                        break
+                    else:
+                        logging.warning(f"Feed still empty with {interpreter}")
+                        logging.info(f"Feed content: {feed}")
+                except Exception as e:
+                    logging.warning(f"Failed with {interpreter}: {e}")
             return []
 
         posts = []
