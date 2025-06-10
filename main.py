@@ -65,7 +65,6 @@ def submit_arxiv_issues(entries, config, seen_ids, repo, token):
     """
     tech_domains = config["tech_domains"]
 
-    # Phase 1: Check affiliations in parallel to identify valid entries
     entries_to_check = [entry for entry in entries if entry.id not in seen_ids]
     valid_entries = []
 
@@ -89,7 +88,6 @@ def submit_arxiv_issues(entries, config, seen_ids, repo, token):
             except Exception as e:
                 logging.warning(f"Error checking affiliation for {entry.id}: {e}")
 
-    # Phase 2: Sequential summarization and issue creation
     for entry in tqdm(
         valid_entries,
         desc="Processing new arXiv papers",
@@ -99,7 +97,8 @@ def submit_arxiv_issues(entries, config, seen_ids, repo, token):
         if entry.id in seen_ids:
             continue
 
-        # Summarize with Ollama sequentially to avoid overloading
+        # Summarize with Ollama sequentially given Ollama is ressource-intensive
+        # TODO: Consider not using an LLM to make this faster but it is too fun to do it on a github workflow :D
         summary = summarize_with_ollama(entry.title, entry.summary)
         create_issue(repo, token, entry, summary)
         logging.info(f"✅ Issue for arXiv paper: {entry.title}")

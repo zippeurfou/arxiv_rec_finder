@@ -7,6 +7,8 @@ from arxiv_parser import extract_emails_from_arxiv_pdf
 def extract_affiliations(entry):
     """
     Yield each author‐affiliation (lowercased) from an arXiv entry, if present.
+    Args:
+        entry: arXiv entry object with authors and metadata.
     """
     for author in entry.get("authors", []):
         if "affiliation" in author:
@@ -17,12 +19,25 @@ def extract_affiliations(entry):
 
 def has_big_tech_author(entry, tech_domains, use_text=False):
     """
+    Check if the arXiv entry has any authors affiliated with big tech companies.
+    This function performs three checks in order:
     1) Try to detect any of our `tech_domains` in the author‐affiliation fields.
     2) If none found, second pass: look at emails extracted from the arXiv PDF
        and check if any email’s domain matches a tech domain.
     3) Finally (optional; only if `use_text=True`), scan title + summary text
        (whole‐word alias match). Returns True (and sets entry.companies) as soon
     as at least one domain is found; otherwise returns False.
+
+    Note:
+        This is a bit of a hacky way to detect big tech affiliations
+        but it works reasonably well for most cases.
+    Args:
+        entry: arXiv entry object with authors and metadata.
+        tech_domains: list of big tech domains to check against.
+        use_text: if True, also scan title + summary text for matches.
+    Returns:
+        True if any big tech domain is found, False otherwise.
+        If True, sets entry.companies to a list of found company names.
     """
     # Pre‐compile patterns for each domain:
     #   alias = domain without TLD (e.g. "meta" from "meta.com")

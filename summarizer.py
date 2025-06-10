@@ -2,6 +2,14 @@ import logging
 from ollama import Client
 
 def summarize_with_ollama(title, abstract):
+    """
+    Summarize a paper using the Ollama LLM.
+    Args:
+        title (str): The title of the paper.
+        abstract (str): The abstract of the paper.
+    Returns:
+        str: A summary of the paper in 3 sentences.
+    """
     prompt = f"Summarize this paper in 3 sentences:\nTitle: {title}\nAbstract: {abstract}"
     try:
         client = Client()

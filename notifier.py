@@ -39,8 +39,15 @@ def _ensure_label(repo, label_name: str) -> None:
 
 def create_issue(repo_name: str, token: str, entry, summary: str):
     """
-    1) For each label in [year] + entry.companies, ensure it exists (with a
-       deterministic color). 2) Create the issue.
+    Create a GitHub issue for the given arXiv entry with the provided summary.
+    The issue will be labeled with the year of publication and the companies.
+    Args:
+        repo_name (str): The name of the GitHub repository (e.g., "username/repo").
+        token (str): GitHub personal access token with permissions to create issues.
+        entry: An arXiv entry object containing metadata like title, published date, link, etc.
+        summary (str): A summary of the paper.
+    Returns:
+        None
     """
     g = Github(token)
     repo = g.get_repo(repo_name)
