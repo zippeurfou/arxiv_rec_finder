@@ -9,9 +9,7 @@ A bot that automatically monitors recent arXiv papers and Substack posts related
 - [Features](#features)  
 - [Requirements](#requirements)  
 - [Installation](#installation)  
-- [Configuration](#configuration)  
 - [Usage](#usage)  
-- [Directory Structure](#directory-structure)  
 - [GitHub Actions Workflow](#github-actions-workflow)  
 - [License](#license)  
 

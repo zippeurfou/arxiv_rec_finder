@@ -46,6 +46,7 @@ The content is organized as follows:
 .gitignore
 .python-version
 arxiv_client.py
+arxiv_parser.py
 config.yaml
 filter_affiliations.py
 LICENSE
@@ -60,43 +61,6 @@ summarizer.py
 
 <files>
 This section contains the contents of the repository's files.
-
-<file path="substack_client.py">
-import logging
-
-from substack_api import Newsletter, User
-
-
-def get_substack_domains(username):
-    try:
-        user = User(username)
-        newsletters = user.get_subscriptions()
-        return [f"https://{n.get('domain')}" for n in newsletters]
-    except Exception as e:
-        logging.warning(f"Substack domain fetch failed: {e}")
-        return []
-
-
-def fetch_substack_posts(url, limit=3):
-    try:
-        nl = Newsletter(url)
-        posts = nl.get_posts(limit=limit)
-        result = []
-        for p in posts:
-            meta = p.get_metadata()
-            result.append(
-                {
-                    "title": meta.get("title", ""),
-                    "date": meta.get("post_date"),
-                    "url": meta.get("canonical_url"),
-                    "content": p.get_content(),
-                }
-            )
-        return result
-    except Exception as e:
-        logging.warning(f"Substack fetch failed: {e}")
-        return []
-</file>
 
 <file path=".gitignore">
 # Byte-compiled / optimized / DLL files
@@ -299,30 +263,6 @@ cython_debug/
 3.12
 </file>
 
-<file path="filter_affiliations.py">
-def extract_affiliations(entry):
-    for author in entry.get("authors", []):
-        if "affiliation" in author:
-            yield author["affiliation"].lower()
-        elif "arxiv_affiliation" in author:
-            yield author["arxiv_affiliation"].lower()
-
-def has_big_tech_author(entry, tech_domains):
-    for aff in extract_affiliations(entry):
-        for dom in tech_domains:
-            key = dom.split(".")[0]
-            if key in aff or dom in aff:
-                entry.companies = [key.capitalize()]
-                return True
-    # fallback: look in title/abstract
-    text = (entry.title + " " + entry.summary).lower()
-    matches = [d.split(".")[0].capitalize() for d in tech_domains if f" {d.split(".")[0]} " in text or d in text]
-    if matches:
-        entry.companies = matches
-        return True
-    return False
-</file>
-
 <file path="LICENSE">
 MIT License
 
@@ -347,124 +287,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 </file>
 
-<file path="main.py">
-import logging
-import os
-
-import yaml
-from urlib.parse import urlparse
-
-from arxiv_client import get_recent_arxiv_papers
-from filter_affiliations import has_big_tech_author
-from notifier import create_issue
-from store import load_seen_from_issues
-from substack_client import fetch_substack_posts, get_substack_domains
-from summarizer import summarize_with_ollama
-
-logging.basicConfig(level=logging.INFO)
-
-
-class FakeEntry:
-    def __init__(
-        self,
-        id="",
-        title="",
-        published="",
-        link="",
-        companies=None,
-    ):
-        self.id = id
-        self.title = title
-        self.published = published
-        self.link = link
-        self.companies = companies
-
-
-def main():
-    config = yaml.safe_load(open("config.yaml"))
-    token = os.getenv("GITHUB_TOKEN")
-    if not token:
-        raise RuntimeError("GITHUB_TOKEN not set")
-    repo = config["github"]["repo"]
-
-    seen = load_seen_from_issues(repo, token)
-
-    cats = [c.strip() for c in config["arxiv_category"].split("OR")]
-    papers, ids = [], set()
-    for cat in cats:
-        for entry in get_recent_arxiv_papers(config["search_query"], cat):
-            aid = entry.id.split("/")[-1]
-            if aid not in ids:
-                papers.append(entry)
-                ids.add(aid)
-
-    for entry in papers:
-        aid = entry.id.split("/")[-1]
-        if aid in seen:
-            continue
-        if has_big_tech_author(entry, config["tech_domains"]):
-            summary = summarize_with_ollama(entry.title, entry.summary)
-            create_issue(repo, token, entry, summary)
-            logging.info(f"✅ Issue for {entry.title}")
-
-    for username in config.get("substack_username", []):
-        urls = get_substack_domains(username)
-        for url in urls:
-            posts = fetch_substack_posts(url, limit=config.get("substack_limit", 5))
-            for post in posts:
-                meta_id = post["url"].split("/")[-1]
-                if meta_id in seen:
-                    continue
-                # Treat substack posts as issues
-                summary = summarize_with_ollama(post["title"], post["content"])
-                fe = FakeEntry(
-                    id=post["url"],
-                    title=post["title"],
-                    published=post["date"],
-                    link=post["url"],
-                    companies=[
-                        "Substack",
-                        urlparse(post["url"]).hostname.split(".")[0].capitalize(),
-                    ],
-                )
-                fe.id = post["url"]
-                fe.title = post["title"]
-                fe.published = post["date"]
-                fe.link = post["url"]
-                fe.companies = ["Substack"]
-                create_issue(repo, token, fe, summary)
-                logging.info(f"✅ Created Substack issue: {post['title']}")
-
-
-if __name__ == "__main__":
-    main()
-</file>
-
-<file path="notifier.py">
-from github import Github
-
-
-def create_issue(repo_name, token, entry, summary):
-    g = Github(token)
-    repo = g.get_repo(repo_name)
-    companies = ", ".join(entry.companies)
-    year = entry.published[:4]
-    title = entry.title
-
-    labels = [year] + entry.companies
-    issue_title = f"[arXiv {year}] {title} ({companies})"
-    body = f"""🧠 **Title:** {title}
-
-📅 **Published:** {entry.published}
-🔗 **URL:** {entry.link}
-🧑‍💼 **Companies:** {companies}
-
-📝 **Summary:**  
-{summary}
-"""
-    repo.create_issue(title=issue_title, body=body, labels=labels[:5])
-</file>
-
 <file path="README.md">
 # arxiv_rec_finder
 
@@ -477,19 +299,153 @@ Add project description here.
 Add instructions on how to get started with the project.
 </file>
 
+<file path="substack_client.py">
+import logging
+
+from substack_api import Newsletter, User
+
+
+def get_substack_domains(username):
+    try:
+        user = User(username)
+        newsletters = user.get_subscriptions()
+        return [f"https://{n.get('domain')}" for n in newsletters]
+    except Exception as e:
+        logging.warning(f"Substack domain fetch failed: {e}")
+        return []
+
+
+def fetch_substack_posts(url, limit=3):
+    try:
+        nl = Newsletter(url)
+        posts = nl.get_posts(limit=limit)
+        result = []
+        for p in posts:
+            meta = p.get_metadata()
+            result.append(
+                {
+                    "title": meta.get("title", ""),
+                    "date": meta.get("post_date"),
+                    "url": meta.get("canonical_url"),
+                    "content": p.get_content(),
+                }
+            )
+        return result
+    except Exception as e:
+        logging.warning(f"Substack fetch failed: {e}")
+        return []
+</file>
+
+<file path="arxiv_parser.py">
+import re
+from io import BytesIO
+
+import requests
+from PyPDF2 import PdfReader
+
+
+def download_pdf(arxiv_id):
+    """
+    Download the full PDF from arXiv given an arXiv ID like '2411.11508v1'
+    """
+    base_id = arxiv_id.split("v")[0]  # strip version suffix
+    pdf_url = f"https://arxiv.org/pdf/{base_id}.pdf"
+    print(f"Downloading: {pdf_url}")
+    response = requests.get(pdf_url)
+    response.raise_for_status()
+    return BytesIO(response.content)
+
+
+def extract_text_from_pdf(pdf_stream, max_pages=3):
+    """
+    Extract all text from the PDF using PyPDF2
+    """
+    reader = PdfReader(pdf_stream)
+    all_text = ""
+    i = 0
+    for page in reader.pages:
+        i += 1
+        if i >= max_pages:
+            break
+        page_text = page.extract_text()
+        if page_text:
+            all_text += page_text + "\n"
+    return all_text
+
+
+def find_emails(text):
+    """
+    Return all email-like strings found in the text, including:
+    - Grouped addresses like {user1, user2}@domain.com (allows spaces),
+      with domain restricted to lowercase so trailing uppercase letters are excluded.
+    - Standalone emails like user@domain.com, with domain restricted to lowercase.
+    """
+    emails = set()
+
+    # 1. Handle grouped emails: {user1, user2}@domain.com (allows spaces),
+    #    domain part only lowercase/digits/dots/hyphens to avoid capturing trailing uppercase.
+    grouped_pattern = re.compile(
+        r"\{\s*([A-Za-z0-9._+\-]+(?:\s*,\s*[A-Za-z0-9._+\-]+)+)\s*\}\s*@"  # {user1, user2}@
+        r"([a-z0-9.\-]+\.[a-z]{2,})"  # domain.tld (lowercase)
+    )
+    for match in grouped_pattern.finditer(text):
+        local_group, domain = match.groups()
+        users = [u.strip() for u in local_group.split(",")]
+        for user in users:
+            if user:
+                emails.add(f"{user}@{domain}")
+
+    # 2. Handle standalone emails like user@domain.com,
+    #    with domain part only lowercase/digits/dots/hyphens.
+    standalone_pattern = re.compile(
+        r"[A-Za-z0-9._+\-]+@"  # local part
+        r"[a-z0-9.\-]+\.[a-z]{2,}"  # domain.tld (lowercase)
+    )
+    for match in standalone_pattern.finditer(text):
+        emails.add(match.group(0))
+
+    return sorted(emails)
+
+
+def extract_emails_from_arxiv_pdf(arxiv_id):
+    pdf_stream = download_pdf(arxiv_id)
+    full_text = extract_text_from_pdf(pdf_stream)
+    emails = find_emails(full_text)
+    return emails
+
+
+if __name__ == "__main__":
+    arxiv_id = "2410.16780v2"
+    # arxiv_id = "2410.20642v1"
+    # arxiv_id = "2410.16823v1"
+    # arxiv_id = "2410.11150v1"
+    # arxiv_id = "2503.12733v2"
+    emails = extract_emails_from_arxiv_pdf(arxiv_id)
+    print(f"Found emails in arXiv paper {arxiv_id}:\n{emails}")
+</file>
+
 <file path="store.py">
 from github import Github
-
+import re
 
 def load_seen_from_issues(repo_name, token):
+    """
+    Fetch all issues (open + closed) in `repo_name` and collect every URL found
+    in the issue body. Return a set of those URLs, which will be used by main.py
+    to avoid re‐posting the same arXiv entry or Substack post.
+    """
     g = Github(token)
     repo = g.get_repo(repo_name)
     seen = set()
+
+    url_pattern = re.compile(r"https?://\S+")
+
     for issue in repo.get_issues(state="all"):
-        if "https://arxiv.org/abs/" in issue.body:
-            for line in issue.body.splitlines():
-                if "https://arxiv.org/abs/" in line:
-                    seen.add(line.strip().split("/")[-1])
+        body = issue.body or ""
+        for line in body.splitlines():
+            for match in url_pattern.findall(line):
+                # Store the raw URL (e.g. "https://arxiv.org/abs/2505.15091v3" or "https://some.substack.com/slug")
+                seen.add(match.rstrip())
     return seen
 </file>
 
@@ -498,6 +454,14 @@ import logging
 from ollama import Client
 
 def summarize_with_ollama(title, abstract):
+    """
+    Summarize a paper using the Ollama LLM.
+    Args:
+        title (str): The title of the paper.
+        abstract (str): The abstract of the paper.
+    Returns:
+        str: A summary of the paper in 3 sentences.
+    """
     prompt = f"Summarize this paper in 3 sentences:\nTitle: {title}\nAbstract: {abstract}"
     try:
         client = Client()
@@ -508,6 +472,51 @@ def summarize_with_ollama(title, abstract):
     except Exception as e:
         logging.warning(f"Ollama error: {e}")
         return f"(Abstract fallback)\n\n{abstract[:500]}..."
+</file>
+
+<file path=".github/workflows/daily.yaml">
+name: arxiv-bot-daily
+
+on:
+  schedule:
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama server
+        run: |
+          ollama serve &
+          # Wait until Ollama is listing models (server ready)
+          until ollama list >/dev/null 2>&1; do
+            echo "Waiting for Ollama..."
+            sleep 1
+          done
+
+      - name: Pull deepseek model
+        run: ollama pull deepseek-r1:latest
+
+      - name: Run bot
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run python main.py
 </file>
 
 <file path="config.yaml">
@@ -566,6 +575,107 @@ github:
   repo: zippeurfou/arxiv_rec_finder
 </file>
 
+<file path="notifier.py">
+# notifier.py
+import hashlib
+
+from github import Github, GithubException
+
+
+def _color_for_label(name: str) -> str:
+    """
+    Deterministically turn `name` into a “nice” 6‑digit hex string.
+    We:
+      1. Compute MD5(name.encode("utf8"))
+      2. Take the first 3 bytes → R, G, B
+      3. Clamp each channel to [0x40, 0xE0] so it’s neither too dark nor too light.
+    """
+    digest = hashlib.md5(name.encode("utf8")).digest()
+    rgb = []
+    for b in digest[:3]:
+        # clamp to range [0x40, 0xE0] to avoid extremes
+        clamped = 0x40 + (b % (0xE0 - 0x40))
+        rgb.append(clamped)
+    return "{:02x}{:02x}{:02x}".format(*rgb)
+
+
+def _ensure_label(repo, label_name: str) -> None:
+    """
+    If a label with `label_name` doesn’t exist in `repo`, create it using a
+    deterministic color from `_color_for_label(label_name)`. If it does exist,
+    do nothing (we don’t touch its existing color).
+    """
+    try:
+        repo.get_label(label_name)
+    except GithubException as e:
+        if e.status == 404:
+            color = _color_for_label(label_name)
+            repo.create_label(name=label_name, color=color)
+        else:
+            raise
+
+
+def create_issue(repo_name: str, token: str, entry, summary: str):
+    """
+    Create a GitHub issue for the given arXiv entry with the provided summary.
+    The issue will be labeled with the year of publication and the companies.
+    Args:
+        repo_name (str): The name of the GitHub repository (e.g., "username/repo").
+        token (str): GitHub personal access token with permissions to create issues.
+        entry: An arXiv entry object containing metadata like title, published date, link, etc.
+        summary (str): A summary of the paper.
+    Returns:
+        None
+    """
+    g = Github(token)
+    repo = g.get_repo(repo_name)
+
+    # Build “year” and each company label
+    year = entry.published[:4]
+    companies = entry.companies or []
+    labels = [year] + companies
+
+    # 1) ensure each label exists (with a nice color)
+    for lbl in labels:
+        _ensure_label(repo, lbl)
+
+    # 2) construct issue text as before
+    title = entry.title
+    company_list = ", ".join(companies)
+    issue_title = f"[arXiv {year}] {title} ({company_list})"
+    body = f"""🧠 **Title:** {title}
+
+📅 **Published:** {entry.published}
+🔗 **URL:** {entry.link}
+🧑‍💼 **Companies:** {company_list}
+
+📝 **Summary:**  
+{summary}
+"""
+    # Now all labels definitely exist, so we can safely pass their names
+    repo.create_issue(title=issue_title, body=body, labels=labels[:5])
+</file>
+
+<file path="arxiv_client.py">
+from urllib.parse import quote_plus
+
+import feedparser
+
+
+def get_recent_arxiv_papers(query, category, max_results=200):
+    base_url = "http://export.arxiv.org/api/query?"
+    safe_query = quote_plus(query)  # encode "a b" → "a+b"
+    safe_cat = quote_plus(category)
+    q = (
+        f"search_query=all:{safe_query}"
+        f"+AND+cat:{safe_cat}"
+        "&sortBy=submittedDate&sortOrder=descending"
+        f"&max_results={max_results}"
+    )
+    feed = feedparser.parse(base_url + q)
+    return feed.entries
+</file>
+
 <file path="pyproject.toml">
 [project]
 name = "arxiv-rec-finder"
@@ -578,79 +688,289 @@ dependencies = [
     "ollama>=0.5.1",
     "pygithub>=2.6.1",
     "pyyaml>=6.0.2",
+    "substack-api>=1.1.1",
+    "tqdm>=4.67.1",
+    "pypdf2>=3.0.1",
+    "requests>=2.32.4",
 ]
 
 [dependency-groups]
 dev = [
     "ipython>=9.3.0",
     "pyright>=1.1.401",
-    "substack-api>=1.1.1",
 ]
 </file>
 
-<file path=".github/workflows/daily.yaml">
-name: arxiv-bot-daily
+<file path="filter_affiliations.py">
+import logging
+import re
 
-on:
-  schedule:
-    - cron: "0 13 * * *"
-  workflow_dispatch:
+from arxiv_parser import extract_emails_from_arxiv_pdf
 
-permissions:
-  contents: read
-  issues: write
 
-jobs:
-  run-bot:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
+def extract_affiliations(entry):
+    """
+    Yield each author‐affiliation (lowercased) from an arXiv entry, if present.
+    Args:
+        entry: arXiv entry object with authors and metadata.
+    """
+    for author in entry.get("authors", []):
+        if "affiliation" in author:
+            yield author["affiliation"].lower()
+        elif "arxiv_affiliation" in author:
+            yield author["arxiv_affiliation"].lower()
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
 
-      - name: Sync dependencies
-        run: uv sync
+def has_big_tech_author(entry, tech_domains, use_text=False):
+    """
+    Check if the arXiv entry has any authors affiliated with big tech companies.
+    This function performs three checks in order:
+    1) Try to detect any of our `tech_domains` in the author‐affiliation fields.
+    2) If none found, second pass: look at emails extracted from the arXiv PDF
+       and check if any email’s domain matches a tech domain.
+    3) Finally (optional; only if `use_text=True`), scan title + summary text
+       (whole‐word alias match). Returns True (and sets entry.companies) as soon
+    as at least one domain is found; otherwise returns False.
 
-      - name: Install Ollama
-        run: curl -fsSL https://ollama.com/install.sh | sh
+    Note:
+        This is a bit of a hacky way to detect big tech affiliations
+        but it works reasonably well for most cases.
+    Args:
+        entry: arXiv entry object with authors and metadata.
+        tech_domains: list of big tech domains to check against.
+        use_text: if True, also scan title + summary text for matches.
+    Returns:
+        True if any big tech domain is found, False otherwise.
+        If True, sets entry.companies to a list of found company names.
+    """
+    # Pre‐compile patterns for each domain:
+    #   alias = domain without TLD (e.g. "meta" from "meta.com")
+    #   we'll match alias as a whole word; matching domain literally is optional,
+    #   but we include it in case someone wrote "Meta.com" in their affiliation.
+    patterns = []
+    for dom in tech_domains:
+        alias = dom.split(".")[0].lower()
+        alias_pat = re.compile(rf"\b{re.escape(alias)}\b", re.IGNORECASE)
+        domain_pat = re.compile(rf"(?<!\S){re.escape(dom)}(?!\S)", re.IGNORECASE)
+        patterns.append((dom, alias, alias_pat, domain_pat))
 
-      - name: Start Ollama server
-        run: |
-          ollama serve &
-          # Wait until Ollama is listing models (server ready)
-          until ollama list >/dev/null 2>&1; do
-            echo "Waiting for Ollama..."
-            sleep 1
-          done
+    # 1) Check author affiliations metadata first
+    for aff in extract_affiliations(entry):
+        for dom, alias, alias_pat, domain_pat in patterns:
+            if alias_pat.search(aff) or domain_pat.search(aff):
+                entry.companies = [alias.capitalize()]
+                return True
 
-      - name: Pull deepseek model
-        run: ollama pull deepseek-r1:latest
+    # 2) Second pass: extract emails from PDF and check domains
+    try:
+        # entry.id is usually a URL like "http://arxiv.org/abs/2505.15091v3"
+        arxiv_id = entry.id.rsplit("/", 1)[-1]
+        emails = extract_emails_from_arxiv_pdf(arxiv_id)
+        for email in emails:
+            email_domain = email.split("@")[-1].lower()
+            for dom, alias, _, _ in patterns:
+                # match if the email domain ends with the tech domain (e.g. "research.meta.com" endswith "meta.com")
+                if email_domain == dom or email_domain.endswith(f".{dom}"):
+                    entry.companies = [alias.capitalize()]
+                    return True
+    except Exception as e:
+        logging.warning(f"Failed to extract emails from PDF for {entry.id}: {e}")
+        # If PDF download or parsing fails, skip this pass silently
+        pass
 
-      - name: Run bot
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: uv run python main.py
+    # 3) Fallback: look in title + abstract, only if use_text=True
+    # This is pretty noisy, so we only do it if explicitly requested.
+    if use_text:
+        text = (entry.title + " " + entry.summary).lower()
+        found = []
+        for dom, alias, alias_pat, domain_pat in patterns:
+            if alias_pat.search(text) or domain_pat.search(text):
+                found.append(alias.capitalize())
+
+        if found:
+            entry.companies = sorted(set(found))
+            return True
+
+    return False
 </file>
 
-<file path="arxiv_client.py">
-from urllib.parse import quote_plus
+<file path="main.py">
+import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse
 
-import feedparser
+import yaml
+from tqdm import tqdm
+
+from arxiv_client import get_recent_arxiv_papers
+from filter_affiliations import has_big_tech_author
+from notifier import create_issue
+from store import load_seen_from_issues
+from substack_client import fetch_substack_posts, get_substack_domains
+from summarizer import summarize_with_ollama
+
+logging.basicConfig(level=logging.INFO)
 
 
-def get_recent_arxiv_papers(query, category, max_results=1000):
-    base_url = "http://export.arxiv.org/api/query?"
-    safe_query = quote_plus(query)  # encode "a b" → "a+b"
-    safe_cat = quote_plus(category)
-    q = (
-        f"search_query=all:{safe_query}"
-        f"+AND+cat:{safe_cat}"
-        "&sortBy=submittedDate&sortOrder=descending"
-        f"&max_results={max_results}"
-    )
-    feed = feedparser.parse(base_url + q)
-    return feed.entries
+class FakeEntry:
+    def __init__(self, id="", title="", published="", link="", companies=None):
+        self.id = id
+        self.title = title
+        self.published = published
+        self.link = link
+        self.companies = companies
+
+
+def load_config(path="config.yaml"):
+    """Load YAML configuration from disk."""
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+def collect_new_arxiv_entries(config, seen_ids):
+    """
+    Fetch recent arXiv entries for each category, filter out ones in `seen_ids`,
+    and return a list of new entries.
+    """
+    tech_query = config["search_query"]
+    categories = [c.strip() for c in config["arxiv_category"].split("OR")]
+    new_entries = []
+    seen_local = set()
+
+    for cat in categories:
+        recent = get_recent_arxiv_papers(tech_query, cat)
+        for entry in tqdm(
+            recent,
+            desc=f"Fetching arXiv ({cat})",
+            unit="paper",
+            leave=False,
+        ):
+            if entry.id in seen_ids:
+                continue
+            if entry.id not in seen_local:
+                new_entries.append(entry)
+                seen_local.add(entry.id)
+
+    return new_entries
+
+
+def submit_arxiv_issues(entries, config, seen_ids, repo, token):
+    """
+    Check affiliations for entries in parallel, then for those with big-tech
+    authors, summarize sequentially and create issues.
+    """
+    tech_domains = config["tech_domains"]
+
+    entries_to_check = [entry for entry in entries if entry.id not in seen_ids]
+    valid_entries = []
+
+    with ThreadPoolExecutor() as executor:
+        # Submit all tasks
+        tasks = [
+            (entry, executor.submit(has_big_tech_author, entry, tech_domains))
+            for entry in entries_to_check
+        ]
+
+        # Collect results
+        for entry, future in tqdm(
+            tasks,
+            desc="Checking affiliations",
+            unit="paper",
+            leave=False,
+        ):
+            try:
+                if future.result():
+                    valid_entries.append(entry)
+            except Exception as e:
+                logging.warning(f"Error checking affiliation for {entry.id}: {e}")
+
+    for entry in tqdm(
+        valid_entries,
+        desc="Processing new arXiv papers",
+        unit="paper",
+        leave=False,
+    ):
+        if entry.id in seen_ids:
+            continue
+
+        # Summarize with Ollama sequentially given Ollama is ressource-intensive
+        # TODO: Consider not using an LLM to make this faster but it is too fun to do it on a github workflow :D
+        summary = summarize_with_ollama(entry.title, entry.summary)
+        create_issue(repo, token, entry, summary)
+        logging.info(f"✅ Issue for arXiv paper: {entry.title}")
+
+
+def process_substack_users(config, seen_ids, repo, token):
+    """
+    For each Substack username, fetch their domains, then for each post:
+      - Skip if already in seen_ids
+      - Otherwise summarize + create a FakeEntry + create an issue
+    """
+    usernames = config.get("substack_username", [])
+    limit = config.get("substack_limit", 5)
+
+    with tqdm(
+        total=len(usernames),
+        desc="Processing Substack users",
+        unit="user",
+        leave=False,
+    ) as user_bar:
+        for username in usernames:
+            domains = get_substack_domains(username)
+            for domain_url in domains:
+                posts = fetch_substack_posts(domain_url, limit=limit)
+
+                for post in tqdm(
+                    posts,
+                    desc=f"  Posts for {username}",
+                    unit="post",
+                    leave=False,
+                ):
+                    post_url = post["url"].rstrip("/")
+                    if post_url in seen_ids:
+                        continue
+
+                    summary = summarize_with_ollama(post["title"], post["content"])
+                    fe = FakeEntry(
+                        id=post_url,
+                        title=post["title"],
+                        published=post["date"],
+                        link=post_url,
+                        companies=[
+                            "Substack",
+                            urlparse(post_url).hostname.split(".")[0].capitalize(),
+                        ],
+                    )
+                    create_issue(repo, token, fe, summary)
+                    logging.info(f"✅ Created Substack issue: {post['title']}")
+
+            user_bar.update(1)
+
+
+def main():
+    # 0) Load config + token + repo name
+    config = load_config("config.yaml")
+    token = os.getenv("GITHUB_TOKEN")
+    if not token:
+        raise RuntimeError("GITHUB_TOKEN not set")
+    repo = config["github"]["repo"]
+
+    # 1) Fetch all already-seen URLs from GitHub issues
+    seen_ids = load_seen_from_issues(repo, token)
+
+    # 2) Collect new arXiv entries (skip ones already in seen_ids)
+    new_arxiv = collect_new_arxiv_entries(config, seen_ids)
+
+    # 3) Submit issues for eligible arXiv papers
+    submit_arxiv_issues(new_arxiv, config, seen_ids, repo, token)
+
+    # 4) Process Substack posts
+    process_substack_users(config, seen_ids, repo, token)
+
+
+if __name__ == "__main__":
+    main()
 </file>
 
 </files>
