@@ -33,15 +33,17 @@ dependencies = [
     { name = "feedparser" },
     { name = "ollama" },
     { name = "pygithub" },
+    { name = "pypdf2" },
     { name = "pyyaml" },
+    { name = "requests" },
     { name = "substack-api" },
+    { name = "tqdm" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "ipython" },
     { name = "pyright" },
-    { name = "substack-api" },
 ]
 
 [package.metadata]
@@ -49,15 +51,17 @@ requires-dist = [
     { name = "feedparser", specifier = ">=6.0.11" },
     { name = "ollama", specifier = ">=0.5.1" },
     { name = "pygithub", specifier = ">=2.6.1" },
+    { name = "pypdf2", specifier = ">=3.0.1" },
     { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "requests", specifier = ">=2.32.4" },
     { name = "substack-api", specifier = ">=1.1.1" },
+    { name = "tqdm", specifier = ">=4.67.1" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "ipython", specifier = ">=9.3.0" },
     { name = "pyright", specifier = ">=1.1.401" },
-    { name = "substack-api", specifier = ">=1.1.1" },
 ]
 
 [[package]]
@@ -535,6 +539,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pypdf2"
+version = "3.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9f/bb/18dc3062d37db6c491392007dfd1a7f524bb95886eb956569ac38a23a784/PyPDF2-3.0.1.tar.gz", hash = "sha256:a74408f69ba6271f71b9352ef4ed03dc53a31aa404d29b5d31f53bfecfee1440", size = 227419, upload-time = "2022-12-31T10:36:13.13Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8e/5e/c86a5643653825d3c913719e788e41386bee415c2b87b4f955432f2de6b2/pypdf2-3.0.1-py3-none-any.whl", hash = "sha256:d16e4205cfee272fbdc0568b68d82be796540b1537508cef59388f839c191928", size = 232572, upload-time = "2022-12-31T10:36:10.327Z" },
+]
+
+[[package]]
 name = "pyright"
 version = "1.1.401"
 source = { registry = "https://pypi.org/simple" }
@@ -627,6 +640,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/fd/39/2ba19c19022422c8283d8d67b4134f99df2c67043eee47dc46a29851b861/substack_api-1.1.1.tar.gz", hash = "sha256:7cd865062121d4597f1008e108336324374f376bc090c67beb7b7c1671fbdbe3", size = 19782, upload-time = "2025-05-25T17:36:34.482Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b2/ce/777b7c981a87e8b4f71697206da6f262065e8af384567fd82f40b7e8b754/substack_api-1.1.1-py3-none-any.whl", hash = "sha256:67ade6187c06fbecbdc49f608a8c2e07ff1a8d7a2deba19ae4a987301e6d2f30", size = 13243, upload-time = "2025-05-25T17:36:33.639Z" },
+]
+
+[[package]]
+name = "tqdm"
+version = "4.67.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a8/4b/29b4ef32e036bb34e4ab51796dd745cdba7ed47ad142a9f4a1eb8e0c744d/tqdm-4.67.1.tar.gz", hash = "sha256:f8aef9c52c08c13a65f30ea34f4e5aac3fd1a34959879d7e59e63027286627f2", size = 169737, upload-time = "2024-11-24T20:12:22.481Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d0/30/dc54f88dd4a2b5dc8a0279bdd7270e735851848b762aeb1c1184ed1f6b14/tqdm-4.67.1-py3-none-any.whl", hash = "sha256:26445eca388f82e72884e0d580d5464cd801a3ea01e63e5601bdff9ba6a48de2", size = 78540, upload-time = "2024-11-24T20:12:19.698Z" },
 ]
 
 [[package]]

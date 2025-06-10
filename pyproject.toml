@@ -10,11 +10,13 @@ dependencies = [
     "pygithub>=2.6.1",
     "pyyaml>=6.0.2",
     "substack-api>=1.1.1",
+    "tqdm>=4.67.1",
+    "pypdf2>=3.0.1",
+    "requests>=2.32.4",
 ]
 
 [dependency-groups]
 dev = [
     "ipython>=9.3.0",
     "pyright>=1.1.401",
-    "substack-api>=1.1.1",
 ]
