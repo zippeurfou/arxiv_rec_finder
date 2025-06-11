@@ -126,7 +126,7 @@ def process_substack_users(config, seen_ids, repo, token):
 
                 for post in tqdm(
                     posts,
-                    desc=f"  Posts for {username}",
+                    desc=f"  Posts for {domain_url}",
                     unit="post",
                     leave=False,
                 ):
