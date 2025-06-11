@@ -42,25 +42,26 @@ def get_substack_domains(username):
         # This is a workaround until I find a better way to fetch Substack domains.
         # I am suspecting that Substack is blocking the IP of the Github Action runner.
         # TODO: Find a better way to fetch Substack domains.
-        return [
-            "https://recsysml.substack.com",
-            "https://happystrongcoder.substack.com",
-            "https://datamachina.substack.com",
-            "https://stkbailey.substack.com",
-            "https://dhruvil.substack.com",
-            "https://dblalock.substack.com",
-            "https://cameronrwolfe.substack.com",
-            "https://mikkeldengsoe.substack.com",
-            "https://lukezhuo.substack.com",
-            "https://mlfrontiers.substack.com",
-            "https://vicki.substack.com",
-            "https://on.substack.com",
-            "https://aakashgupta.substack.com",
-            "https://quastor.substack.com",
-            "https://erishabh.substack.com",
-            "https://recsys.substack.com",
-            "https://roizner.substack.com",
-        ]
+        # return [
+        #     "https://recsysml.substack.com",
+        #     "https://happystrongcoder.substack.com",
+        #     "https://datamachina.substack.com",
+        #     "https://stkbailey.substack.com",
+        #     "https://dhruvil.substack.com",
+        #     "https://dblalock.substack.com",
+        #     "https://cameronrwolfe.substack.com",
+        #     "https://mikkeldengsoe.substack.com",
+        #     "https://lukezhuo.substack.com",
+        #     "https://mlfrontiers.substack.com",
+        #     "https://vicki.substack.com",
+        #     "https://on.substack.com",
+        #     "https://aakashgupta.substack.com",
+        #     "https://quastor.substack.com",
+        #     "https://erishabh.substack.com",
+        #     "https://recsys.substack.com",
+        #     "https://roizner.substack.com",
+        # ]
+        return []
 
     except Exception as e:
         logging.warning(f"Unexpected error fetching Substack domains: {e!r}")
