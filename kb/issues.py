@@ -65,7 +65,9 @@ def iter_issues(repo_name: str, token: str, since_issue: int = 0):
     from github import Github
 
     repo = Github(token).get_repo(repo_name)
-    for issue in repo.get_issues(state="all"):
+    # Oldest-first so that --limit batches process the oldest unbuilt papers and the
+    # incremental watermark (max issue) advances monotonically without skipping.
+    for issue in repo.get_issues(state="all", sort="created", direction="asc"):
         if issue.number <= since_issue:
             continue
         rec = parse_issue(

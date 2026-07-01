@@ -1,4 +1,8 @@
 import datetime
+
+# NOTE: arxiv_id is emitted as a str; PyYAML safe_dump auto-single-quotes it
+# (it looks like a float) so it round-trips as the exact string, not a lossy float
+# like 1809.0006. Verified by tests/test_notes.py::test_paper_note_arxiv_id_roundtrips_as_string.
 import json
 
 import yaml

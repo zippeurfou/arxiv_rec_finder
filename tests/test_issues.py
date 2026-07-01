@@ -78,6 +78,45 @@ def test_clean_title(raw_title, expected):
     assert _clean_title(raw_title) == expected
 
 
+def test_iter_issues_requests_ascending_order(monkeypatch):
+    from kb.issues import iter_issues
+
+    calls = {}
+
+    class FakeLabel:
+        def __init__(self, name):
+            self.name = name
+
+    class FakeIssue:
+        def __init__(self, num):
+            self.number = num
+            self.title = "[arXiv 2026] Paper (Netflix)"
+            self.body = "**URL:** https://arxiv.org/abs/2606.00001v1\n**Summary:** s."
+            self.labels = [FakeLabel("Netflix"), FakeLabel("2026")]
+
+    class FakeRepo:
+        def get_issues(self, **kw):
+            calls.update(kw)
+            return [FakeIssue(1), FakeIssue(2), FakeIssue(3)]
+
+    class FakeGithub:
+        def __init__(self, token):
+            pass
+
+        def get_repo(self, name):
+            return FakeRepo()
+
+    import github
+
+    monkeypatch.setattr(github, "Github", FakeGithub)
+    recs = list(iter_issues("owner/repo", "tok", since_issue=1))
+    # ascending order requested (so --limit batches + watermark don't skip papers)
+    assert calls.get("sort") == "created"
+    assert calls.get("direction") == "asc"
+    # since_issue filter still applied
+    assert [r.issue for r in recs] == [2, 3]
+
+
 def _body(url, summary):
     return f"**Title:** T\n**URL:** {url}\n\n**Summary:**\n{summary}"
 
