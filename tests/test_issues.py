@@ -57,6 +57,27 @@ def test_clean_summary(raw, expected):
     assert _clean_summary(raw) == expected
 
 
+@pytest.mark.parametrize(
+    "raw_title,expected",
+    [
+        (
+            "[arXiv 2026] GenPage: End-to-End Generative Homepage at Netflix (Netflix)",
+            "GenPage: End-to-End Generative Homepage at Netflix",
+        ),
+        (
+            "[arXiv 2018] Aesthetic Features for Photo Recommendation (Shopify)",
+            "Aesthetic Features for Photo Recommendation",
+        ),
+        ("[arXiv 2026] Foo (Google, Meta)", "Foo"),
+        ("Plain Title With No Decoration", "Plain Title With No Decoration"),
+    ],
+)
+def test_clean_title(raw_title, expected):
+    from kb.issues import _clean_title
+
+    assert _clean_title(raw_title) == expected
+
+
 def _body(url, summary):
     return f"**Title:** T\n**URL:** {url}\n\n**Summary:**\n{summary}"
 

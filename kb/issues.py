@@ -11,6 +11,17 @@ _PREAMBLE = re.compile(
 
 _SUMMARY = re.compile(r"\*\*Summary:?\*\*:?\s*(.*)", re.DOTALL | re.IGNORECASE)
 
+# Issue titles are built by notifier.py as "[arXiv <year>] <title> (<companies>)".
+# Strip that decoration to recover the clean paper title.
+_TITLE_PREFIX = re.compile(r"^\[arxiv\s+\d{4}\]\s*", re.IGNORECASE)
+_TITLE_SUFFIX = re.compile(r"\s*\([^()]*\)\s*$")
+
+
+def _clean_title(raw_title: str) -> str:
+    t = _TITLE_PREFIX.sub("", raw_title.strip())
+    t = _TITLE_SUFFIX.sub("", t)
+    return t.strip()
+
 
 @dataclass
 class PaperRecord:
@@ -40,7 +51,7 @@ def parse_issue(
     url_m = re.search(r"(https?://arxiv\.org/\S+)", body)
     return PaperRecord(
         arxiv_id=arxiv_id,
-        title=title.strip(),
+        title=_clean_title(title),
         year=years[0] if years else None,
         companies=companies,
         url=url_m.group(1) if url_m else f"https://arxiv.org/abs/{arxiv_id}",
