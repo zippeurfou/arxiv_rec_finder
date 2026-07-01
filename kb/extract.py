@@ -1,5 +1,9 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 import json
+import re
+
+_THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
 @dataclass
@@ -22,12 +26,17 @@ PAPER:
 """
 
 
-def extract_paper(title: str, fulltext: str, vocab_hint: list[str], llm) -> Extraction:
+def extract_paper(
+    title: str, fulltext: str, vocab_hint: list[str], llm: Callable[[str], str]
+) -> Extraction:
     raw = llm(
         PROMPT.format(
             title=title, fulltext=fulltext[:60000], vocab_hint=", ".join(vocab_hint)
         )
     )
+    # Reasoning models (e.g. deepseek-r1) emit <think>...</think> that often
+    # contains braces; strip it before slicing so the JSON parse is reliable.
+    raw = _THINK.sub("", raw)
     data = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
     return Extraction(
         concepts_raw=[c.strip() for c in data["concepts_raw"] if c.strip()],
