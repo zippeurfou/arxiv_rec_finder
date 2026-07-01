@@ -251,6 +251,150 @@ def run_canonicalize(*, kb_dir, vocab) -> None:
     regenerate(kb_dir, vocab)
 
 
+# --- agent-driven pipeline: prepare (plumbing) -> agent -> ingest (plumbing) --
+#
+# Extraction (concepts_raw + technical_note from full text) is done by an LLM
+# AGENT, not a local model. The pipeline is therefore split into two pure-Python,
+# LLM-free stages with the agent in the middle:
+#
+#   prepare  -> fetches+caches full text, parses references, emits a JSONL
+#               "pending" list (one paper per line) for the agent to read.
+#   <agent>  -> reads each paper's full text, writes an "extractions" JSONL
+#               (arxiv_id, concepts_raw, technical_note).
+#   ingest   -> joins pending + extractions, builds paper notes, canonicalizes,
+#               and regenerates every derived artifact via ``regenerate``.
+#
+# Both stages are per-paper resilient: one bad paper is logged and skipped, never
+# aborting the run.
+
+
+def prepare(records, *, kb_dir, cache_dir, fetch, out_path) -> dict:
+    """Fetch+cache full text and emit a JSONL pending list for the agent.
+
+    No LLM, no extraction here -- only the deterministic plumbing (fetch, cache,
+    parse references). ``fetch`` is injected (production: ``kb.acquire.get_fulltext``
+    bound to ``cache_dir``, which caches to ``cache_dir/<id>.md``).
+    """
+    cache_dir = Path(cache_dir)
+    out_path = Path(out_path)
+
+    pending: list[dict] = []
+    failures: list[str] = []
+    for rec in records:
+        try:
+            fulltext = fetch(rec.arxiv_id)
+            references = parse_references(fulltext)
+            pending.append(
+                {
+                    "arxiv_id": rec.arxiv_id,
+                    "title": rec.title,
+                    "year": rec.year,
+                    "companies": list(rec.companies),
+                    "url": rec.url,
+                    "issue": rec.issue,
+                    "summary": rec.summary,
+                    "fulltext_path": str(cache_dir / f"{rec.arxiv_id}.md"),
+                    "references": references,
+                }
+            )
+        except Exception as e:  # one bad paper must not abort the whole run
+            logging.warning("prepare failed for %s: %s", rec.arxiv_id, e)
+            failures.append(rec.arxiv_id)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        "".join(json.dumps(p, ensure_ascii=False) + "\n" for p in pending),
+        encoding="utf-8",
+    )
+    return {"pending": len(pending), "failures": failures, "out": str(out_path)}
+
+
+def _read_jsonl(path) -> list[dict]:
+    text = Path(path).read_text(encoding="utf-8")
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+def ingest(*, kb_dir, pending_path, extractions_path, vocab) -> dict:
+    """Join agent extractions with the pending metadata, build notes, regenerate.
+
+    No LLM, no fetch. Reads ``pending_path`` (from ``prepare``) and
+    ``extractions_path`` (from the agent), renders one paper note per matched
+    extraction, then rebuilds every derived artifact via ``regenerate``. Papers
+    with no matching extraction are recorded as failures so they stay retryable.
+    """
+    kb_dir = Path(kb_dir)
+    pending = {p["arxiv_id"]: p for p in _read_jsonl(pending_path)}
+    extractions = _read_jsonl(extractions_path)
+
+    prior_state = _read_state(kb_dir)
+    prior_failures = list(prior_state.get("failures") or [])
+    prior_last_issue = prior_state.get("last_issue", 0) or 0
+
+    papers_dir = kb_dir / "papers"
+    papers_dir.mkdir(parents=True, exist_ok=True)
+
+    ingested = 0
+    max_issue = prior_last_issue
+    extracted_ids: set[str] = set()
+    for ex in extractions:
+        arxiv_id = ex.get("arxiv_id")
+        meta = pending.get(arxiv_id)
+        if meta is None:  # extraction with no matching pending entry: skip
+            continue
+        try:
+            concepts_raw = list(ex.get("concepts_raw") or [])
+            concepts, _unmapped = canonicalize(concepts_raw, vocab)
+            note = render_paper_note(
+                arxiv_id=arxiv_id,
+                title=meta.get("title", ""),
+                year=meta.get("year"),
+                companies=list(meta.get("companies") or []),
+                url=meta.get("url", ""),
+                issue=meta.get("issue"),
+                concepts_raw=concepts_raw,
+                concepts=concepts,
+                summary=meta.get("summary", ""),
+                technical_note=ex.get("technical_note", ""),
+                references=list(meta.get("references") or []),
+                citation_count=None,
+            )
+            (papers_dir / f"{arxiv_id}.md").write_text(note, encoding="utf-8")
+            ingested += 1
+            extracted_ids.add(arxiv_id)
+            issue = meta.get("issue")
+            if issue is not None:
+                max_issue = max(max_issue, issue)
+        except Exception as e:  # one bad extraction must not abort the run
+            logging.warning("ingest failed for %s: %s", arxiv_id, e)
+
+    regenerate(kb_dir, vocab)
+
+    # Pending papers the agent never extracted stay retryable.
+    missing_extraction = [aid for aid in pending if aid not in extracted_ids]
+
+    # Cumulative failures: prior failures whose note is still missing, union the
+    # pending ids with no matching extraction. Guard last_issue against regress.
+    kept_prior = [
+        aid for aid in prior_failures if not (papers_dir / f"{aid}.md").exists()
+    ]
+    all_failures = list(dict.fromkeys([*kept_prior, *missing_extraction]))
+
+    summary = {
+        "last_issue": max(max_issue, prior_last_issue),
+        "failures": all_failures,
+        "ingested": ingested,
+    }
+    (kb_dir / "state.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return {
+        "ingested": ingested,
+        "missing_extraction": missing_extraction,
+        "last_issue": summary["last_issue"],
+        "failures": all_failures,
+    }
+
+
 def _git_commit(kb_dir, message) -> None:
     """Stage everything in the data repo and commit; tolerate nothing-to-commit."""
     kb_dir = str(kb_dir)
@@ -276,29 +420,103 @@ def _read_state(kb_dir) -> dict:
     return {}
 
 
-def main(argv=None) -> None:
-    logging.basicConfig(level=logging.INFO)
-    parser = argparse.ArgumentParser(description="Build the recsys knowledge base.")
-    parser.add_argument("--kb-dir", default=os.environ.get("RECSYS_KB_DIR"))
-    parser.add_argument("--repo")
-    parser.add_argument("--incremental", action="store_true")
-    parser.add_argument("--canonicalize", action="store_true")
-    parser.add_argument("--retry-failed", action="store_true")
-    parser.add_argument("--enrich", action="store_true")
-    parser.add_argument("--since-issue", type=int, default=None)
-    parser.add_argument("--limit", type=int, default=None)
-    args = parser.parse_args(argv)
-
+def _resolve_kb_dir(parser, args) -> Path:
     if not args.kb_dir:
         parser.error("--kb-dir is required (or set RECSYS_KB_DIR)")
-    kb_dir = Path(args.kb_dir)
+    return Path(args.kb_dir)
+
+
+def _iter_records(args, kb_dir, token):
+    """Select records from the GitHub issues per --retry-failed / --incremental."""
+    if getattr(args, "retry_failed", False):
+        failed = set(_read_state(kb_dir).get("failures") or [])
+        return (
+            rec
+            for rec in iter_issues(args.repo, token, since_issue=0)
+            if rec.arxiv_id in failed
+        )
+    since_issue = args.since_issue
+    if since_issue is None:
+        since_issue = (
+            _read_state(kb_dir).get("last_issue", 0) if args.incremental else 0
+        )
+    return iter_issues(args.repo, token, since_issue=since_issue)
+
+
+def _cmd_prepare(parser, args) -> None:
+    """Fetch+cache full text and emit the pending JSONL. No LLM, no git commit."""
+    kb_dir = _resolve_kb_dir(parser, args)
+    token = os.environ.get("GITHUB_TOKEN")
+    out_path = Path(args.out) if args.out else kb_dir / ".pending.jsonl"
+
+    def fetch(arxiv_id):
+        return get_fulltext(arxiv_id, cache_dir=DEFAULT_CACHE_DIR)
+
+    records = _iter_records(args, kb_dir, token)
+    if args.limit is not None:
+        records = (r for i, r in enumerate(records) if i < args.limit)
+
+    result = prepare(
+        records,
+        kb_dir=kb_dir,
+        cache_dir=DEFAULT_CACHE_DIR,
+        fetch=fetch,
+        out_path=out_path,
+    )
+    logging.info(
+        "prepared=%s failures=%s out=%s",
+        result["pending"],
+        len(result["failures"]),
+        result["out"],
+    )
+
+
+def _cmd_ingest(parser, args) -> None:
+    """Join pending + agent extractions into notes, regenerate, then commit.
+
+    The transient ``.pending.jsonl`` / ``.extractions.jsonl`` are deleted BEFORE
+    ``_git_commit`` (which does ``git add -A``) so they never land in the data
+    repo -- keeps the commit clean without relying on a .gitignore entry.
+    """
+    kb_dir = _resolve_kb_dir(parser, args)
     vocab = load_vocab(kb_dir / "vocabulary.yaml")
+    pending_path = Path(args.pending) if args.pending else kb_dir / ".pending.jsonl"
+    extractions_path = Path(args.extractions)
 
-    if args.canonicalize:
-        run_canonicalize(kb_dir=kb_dir, vocab=vocab)
-        _git_commit(kb_dir, "chore: re-canonicalize concepts")
-        return
+    result = ingest(
+        kb_dir=kb_dir,
+        pending_path=pending_path,
+        extractions_path=extractions_path,
+        vocab=vocab,
+    )
+    logging.info(
+        "ingested=%s missing=%s",
+        result["ingested"],
+        len(result["missing_extraction"]),
+    )
 
+    # Remove transient files before committing so `git add -A` can't stage them.
+    pending_path.unlink(missing_ok=True)
+    if extractions_path.parent == kb_dir:
+        extractions_path.unlink(missing_ok=True)
+    _git_commit(kb_dir, "feat: ingest agent extractions into knowledge base")
+
+
+def _cmd_canonicalize(parser, args) -> None:
+    kb_dir = _resolve_kb_dir(parser, args)
+    vocab = load_vocab(kb_dir / "vocabulary.yaml")
+    run_canonicalize(kb_dir=kb_dir, vocab=vocab)
+    _git_commit(kb_dir, "chore: re-canonicalize concepts")
+
+
+def _cmd_autonomous(parser, args) -> None:
+    """The legacy end-to-end path with a LOCAL Ollama LLM in-process.
+
+    Preserved only under this explicit subcommand so no other command can trigger
+    Ollama by accident.
+    """
+    kb_dir = _resolve_kb_dir(parser, args)
+    vocab = load_vocab(kb_dir / "vocabulary.yaml")
     token = os.environ.get("GITHUB_TOKEN")
     real_llm = ollama_llm()
 
@@ -312,23 +530,8 @@ def main(argv=None) -> None:
     # opt in with --enrich to merge real Semantic Scholar references.
     enrich = safe_enrich if args.enrich else _noop_enrich
 
-    if args.retry_failed:
-        failed = set(_read_state(kb_dir).get("failures") or [])
-        records = (
-            rec
-            for rec in iter_issues(args.repo, token, since_issue=0)
-            if rec.arxiv_id in failed
-        )
-        runner = run_backfill
-    else:
-        since_issue = args.since_issue
-        if since_issue is None:
-            since_issue = (
-                _read_state(kb_dir).get("last_issue", 0) if args.incremental else 0
-            )
-        records = iter_issues(args.repo, token, since_issue=since_issue)
-        runner = run_incremental if args.incremental else run_backfill
-
+    records = _iter_records(args, kb_dir, token)
+    runner = run_incremental if args.incremental else run_backfill
     summary = runner(
         records,
         kb_dir=kb_dir,
@@ -341,6 +544,51 @@ def main(argv=None) -> None:
     )
     logging.info("built=%s failures=%s", summary["built"], len(summary["failures"]))
     _git_commit(kb_dir, "feat: refresh knowledge base from issues")
+
+
+def _add_selection_args(sub) -> None:
+    """Shared record-selection flags for the issue-reading subcommands."""
+    sub.add_argument("--repo")
+    sub.add_argument("--incremental", action="store_true")
+    sub.add_argument("--since-issue", type=int, default=None)
+    sub.add_argument("--limit", type=int, default=None)
+    sub.add_argument("--retry-failed", action="store_true")
+
+
+def main(argv=None) -> None:
+    logging.basicConfig(level=logging.INFO)
+    parser = argparse.ArgumentParser(description="Build the recsys knowledge base.")
+    parser.add_argument("--kb-dir", default=os.environ.get("RECSYS_KB_DIR"))
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_prepare = sub.add_parser(
+        "prepare", help="fetch+cache full text, emit pending JSONL (no LLM)"
+    )
+    _add_selection_args(p_prepare)
+    p_prepare.add_argument("--out", default=None)
+    p_prepare.set_defaults(func=_cmd_prepare)
+
+    p_ingest = sub.add_parser(
+        "ingest", help="build notes from agent extractions, then commit"
+    )
+    p_ingest.add_argument("--pending", default=None)
+    p_ingest.add_argument("--extractions", required=True)
+    p_ingest.set_defaults(func=_cmd_ingest)
+
+    p_canon = sub.add_parser(
+        "canonicalize", help="re-canonicalize the corpus from disk (no LLM)"
+    )
+    p_canon.set_defaults(func=_cmd_canonicalize)
+
+    p_auto = sub.add_parser(
+        "autonomous", help="legacy end-to-end build with a LOCAL Ollama LLM"
+    )
+    _add_selection_args(p_auto)
+    p_auto.add_argument("--enrich", action="store_true")
+    p_auto.set_defaults(func=_cmd_autonomous)
+
+    args = parser.parse_args(argv)
+    args.func(parser, args)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from kb.build import build_paper, run_backfill, run_canonicalize
+from kb.build import build_paper, ingest, prepare, run_backfill, run_canonicalize
 from kb.extract import Extraction
 from kb.issues import PaperRecord
 
@@ -357,3 +357,210 @@ def test_regenerate_skips_corrupt_note(tmp_path):
     index_lines = (tmp_path / "index.jsonl").read_text().strip().splitlines()
     ids = [json.loads(line)["arxiv_id"] for line in index_lines]
     assert "2601.00001" in ids
+
+
+# --- agent-driven prepare/ingest pipeline (no local LLM) -----------------
+
+
+def _prec(arxiv_id, title):
+    return PaperRecord(
+        arxiv_id=arxiv_id,
+        title=title,
+        year=2026,
+        companies=["Netflix"],
+        url=f"https://arxiv.org/abs/{arxiv_id}",
+        issue=int(arxiv_id.split(".")[0]),
+        summary="S.",
+    )
+
+
+def test_prepare_writes_pending_and_caches(tmp_path):
+    records = [_prec("2601.00001", "Paper One"), _prec("2602.00002", "Paper Two")]
+
+    def fetch(i):
+        return f"# body {i}\n## References\n- Ref A arXiv:1234.56789\n- Ref B"
+
+    out_path = tmp_path / ".pending.jsonl"
+    result = prepare(
+        records,
+        kb_dir=tmp_path,
+        cache_dir=tmp_path / ".cache",
+        fetch=fetch,
+        out_path=out_path,
+    )
+
+    assert result["pending"] == 2
+    assert result["failures"] == []
+    assert result["out"] == str(out_path)
+
+    lines = out_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2
+    entries = {json.loads(line)["arxiv_id"]: json.loads(line) for line in lines}
+    assert set(entries) == {"2601.00001", "2602.00002"}
+    e1 = entries["2601.00001"]
+    assert e1["title"] == "Paper One"
+    assert e1["fulltext_path"] == str((tmp_path / ".cache") / "2601.00001.md")
+    titles = [r["title"] for r in e1["references"]]
+    assert any("Ref A" in t for t in titles)
+    assert e1["references"][0]["arxiv_id"] == "1234.56789"
+
+
+def test_prepare_survives_failure(tmp_path):
+    records = [_prec("2601.00001", "Good"), _prec("2602.00002", "Bad")]
+
+    def fetch(i):
+        if i == "2602.00002":
+            raise RuntimeError("boom fetch")
+        return "# body\n## References\n- R"
+
+    out_path = tmp_path / ".pending.jsonl"
+    result = prepare(
+        records,
+        kb_dir=tmp_path,
+        cache_dir=tmp_path / ".cache",
+        fetch=fetch,
+        out_path=out_path,
+    )
+
+    assert result["pending"] == 1
+    assert result["failures"] == ["2602.00002"]
+    lines = out_path.read_text(encoding="utf-8").strip().splitlines()
+    ids = [json.loads(line)["arxiv_id"] for line in lines]
+    assert ids == ["2601.00001"]
+
+
+def _write_jsonl(path, rows):
+    path.write_text(
+        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+        encoding="utf-8",
+    )
+
+
+def test_ingest_builds_notes_from_extractions(tmp_path):
+    vocab = {"two-tower-retrieval": ["two-tower"], "cold-start": ["cold start"]}
+    pending = tmp_path / ".pending.jsonl"
+    extractions = tmp_path / ".extractions.jsonl"
+
+    _write_jsonl(
+        pending,
+        [
+            {
+                "arxiv_id": "2601.00001",
+                "title": "Paper One",
+                "year": 2026,
+                "companies": ["Netflix"],
+                "url": "https://arxiv.org/abs/2601.00001",
+                "issue": 2601,
+                "summary": "S1.",
+                "fulltext_path": str(tmp_path / ".cache" / "2601.00001.md"),
+                "references": [{"title": "Ref A", "arxiv_id": None}],
+            },
+            {
+                "arxiv_id": "2602.00002",
+                "title": "Paper Two",
+                "year": 2026,
+                "companies": ["Netflix"],
+                "url": "https://arxiv.org/abs/2602.00002",
+                "issue": 2602,
+                "summary": "S2.",
+                "fulltext_path": str(tmp_path / ".cache" / "2602.00002.md"),
+                "references": [],
+            },
+        ],
+    )
+    _write_jsonl(
+        extractions,
+        [
+            {
+                "arxiv_id": "2601.00001",
+                "concepts_raw": ["two-tower"],
+                "technical_note": "TN1.",
+            },
+            {
+                "arxiv_id": "2602.00002",
+                "concepts_raw": ["cold start"],
+                "technical_note": "TN2.",
+            },
+        ],
+    )
+
+    result = ingest(
+        kb_dir=tmp_path,
+        pending_path=pending,
+        extractions_path=extractions,
+        vocab=vocab,
+    )
+
+    assert result["ingested"] == 2
+    note1 = (tmp_path / "papers" / "2601.00001.md").read_text()
+    assert "[[two-tower-retrieval]]" in note1
+    assert "TN1." in note1
+    assert "Ref A" in note1
+
+    index_lines = (tmp_path / "index.jsonl").read_text().strip().splitlines()
+    assert len(index_lines) == 2
+
+    concept_files = list((tmp_path / "concepts").glob("*.md"))
+    assert len(concept_files) >= 2
+
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["ingested"] == 2
+
+
+def test_ingest_records_missing_extraction(tmp_path):
+    vocab = {"two-tower-retrieval": ["two-tower"]}
+    pending = tmp_path / ".pending.jsonl"
+    extractions = tmp_path / ".extractions.jsonl"
+
+    _write_jsonl(
+        pending,
+        [
+            {
+                "arxiv_id": "2601.00001",
+                "title": "Paper One",
+                "year": 2026,
+                "companies": [],
+                "url": "u1",
+                "issue": 2601,
+                "summary": "S1.",
+                "fulltext_path": "x",
+                "references": [],
+            },
+            {
+                "arxiv_id": "2602.00002",
+                "title": "Paper Two",
+                "year": 2026,
+                "companies": [],
+                "url": "u2",
+                "issue": 2602,
+                "summary": "S2.",
+                "fulltext_path": "x",
+                "references": [],
+            },
+        ],
+    )
+    _write_jsonl(
+        extractions,
+        [
+            {
+                "arxiv_id": "2601.00001",
+                "concepts_raw": ["two-tower"],
+                "technical_note": "TN1.",
+            }
+        ],
+    )
+
+    result = ingest(
+        kb_dir=tmp_path,
+        pending_path=pending,
+        extractions_path=extractions,
+        vocab=vocab,
+    )
+
+    assert result["ingested"] == 1
+    assert (tmp_path / "papers" / "2601.00001.md").exists()
+    assert not (tmp_path / "papers" / "2602.00002.md").exists()
+    assert "2602.00002" in result["missing_extraction"]
+
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert "2602.00002" in state["failures"]
