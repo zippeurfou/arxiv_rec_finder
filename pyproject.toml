@@ -20,7 +20,16 @@ dependencies = [
 dev = [
     "ipython>=9.3.0",
     "pyright>=1.1.401",
+    "pytest>=9.1.1",
+    "ruff>=0.15.20",
 ]
 
 [tool.uv.sources]
 cloudscraper = { git = "https://github.com/VeNoMouS/cloudscraper.git", rev = "3.0.0" }
+
+[[tool.uv.index]]
+url = "https://grubhub.jfrog.io/artifactory/api/pypi/pypi-testing/simple"
+
+[[tool.uv.index]]
+url = "https://grubhub.jfrog.io/artifactory/api/pypi/pypi/simple"
+default = true
