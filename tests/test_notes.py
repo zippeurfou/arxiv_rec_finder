@@ -1,6 +1,14 @@
 import json
 
+import yaml
+
 from kb.notes import index_line, render_concept_note, render_paper_note
+
+
+def _frontmatter(md):
+    assert md.startswith("---")
+    fm = md.split("---", 2)[1]
+    return yaml.safe_load(fm)
 
 
 def test_render_paper_note_has_frontmatter_and_links():
@@ -19,9 +27,29 @@ def test_render_paper_note_has_frontmatter_and_links():
         citation_count=3,
     )
     assert md.startswith("---")
-    assert "arxiv_id: 2606.31031" in md
+    assert _frontmatter(md)["arxiv_id"] == "2606.31031"
     assert "[[two-tower-retrieval]]" in md
     assert "## Technical note" in md
+
+
+def test_paper_note_arxiv_id_roundtrips_as_string():
+    md = render_paper_note(
+        arxiv_id="1809.00060",
+        title="T",
+        year=2018,
+        companies=["Shopify"],
+        url="u",
+        issue=1,
+        concepts_raw=["x"],
+        concepts=["cold-start"],
+        summary="S.",
+        technical_note="T.",
+        references=[],
+        citation_count=None,
+    )
+    data = _frontmatter(md)
+    assert data["arxiv_id"] == "1809.00060"  # exact string, no lost zero
+    assert isinstance(data["arxiv_id"], str)
 
 
 def test_index_line_is_json():

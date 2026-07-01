@@ -20,13 +20,6 @@ def _frontmatter(data: dict) -> str:
     return f"---\n{body}---\n"
 
 
-def _paper_frontmatter(arxiv_id: str, rest: dict) -> str:
-    # arXiv ids resemble floats (e.g. 2606.31031); emit the id as a plain
-    # unquoted scalar (matching the KB schema) and YAML-dump the rest.
-    body = yaml.safe_dump(rest, sort_keys=False, allow_unicode=True)
-    return f"---\narxiv_id: {arxiv_id}\n{body}---\n"
-
-
 def render_paper_note(
     *,
     arxiv_id: str,
@@ -42,9 +35,9 @@ def render_paper_note(
     references: list[dict],
     citation_count: int | None,
 ) -> str:
-    fm = _paper_frontmatter(
-        arxiv_id,
+    fm = _frontmatter(
         {
+            "arxiv_id": arxiv_id,
             "title": _Quoted(title),
             "year": year,
             "companies": list(companies),
@@ -54,7 +47,7 @@ def render_paper_note(
             "concepts": list(concepts),
             "citation_count": citation_count,
             "last_built": datetime.date.today().isoformat(),
-        },
+        }
     )
 
     concept_links = " ".join(f"[[{slug}]]" for slug in concepts)
