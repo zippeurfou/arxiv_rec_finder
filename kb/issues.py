@@ -4,8 +4,12 @@ from dataclasses import dataclass
 from kb.ids import extract_arxiv_id
 
 _PREAMBLE = re.compile(
-    r"^\s*here is (a|the).*?summary[^\n:]*:\s*", re.IGNORECASE | re.DOTALL
+    r"^\s*(?:sure[!,.\s]*|okay[!,.\s]*|of course[!,.\s]*)?"
+    r"here(?:'s| is)\s+(?:a|the)\b[^\n.]*?summ[a-z]*[^\n.:]*:\s*\n?",
+    re.IGNORECASE,
 )
+
+_SUMMARY = re.compile(r"\*\*Summary:?\*\*:?\s*(.*)", re.DOTALL | re.IGNORECASE)
 
 
 @dataclass
@@ -20,9 +24,9 @@ class PaperRecord:
 
 
 def _clean_summary(body: str) -> str:
-    m = re.search(r"\*\*Summary:\*\*\s*(.*)", body, re.DOTALL)
+    m = _SUMMARY.search(body)
     text = (m.group(1) if m else body).strip()
-    return _PREAMBLE.sub("", text).strip()
+    return _PREAMBLE.sub("", text, count=1).strip()
 
 
 def parse_issue(
