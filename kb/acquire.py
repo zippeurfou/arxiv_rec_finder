@@ -15,6 +15,7 @@ def _default_fetcher(arxiv_id: str) -> str:
         timeout=90,
     )
     resp.raise_for_status()
+    resp.encoding = "utf-8"
     return resp.text
 
 
@@ -23,7 +24,10 @@ def get_fulltext(arxiv_id: str, cache_dir: Path, fetcher=_default_fetcher) -> st
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = cache_dir / f"{arxiv_id}.md"
     if cached.exists():
-        return cached.read_text()
+        return cached.read_text(encoding="utf-8")
     md = fetcher(arxiv_id)
-    cached.write_text(md)
+    # Do not cache an empty/whitespace-only result: it would poison every
+    # future run. Return it so the caller can decide; next run retries.
+    if md.strip():
+        cached.write_text(md, encoding="utf-8")
     return md
