@@ -1,6 +1,8 @@
 # kb/acquire.py
-from pathlib import Path
+import os
 import time
+from pathlib import Path
+
 import requests
 
 ARXIV2MD_API = "https://arxiv2md.org/api/markdown"
@@ -8,7 +10,8 @@ ARXIV2MD_API = "https://arxiv2md.org/api/markdown"
 
 def _default_fetcher(arxiv_id: str) -> str:
     """Fetch clean markdown incl. references via the hosted arxiv2md.org API."""
-    time.sleep(3)  # politeness / rate limiting for bulk backfill
+    # Politeness / rate-limit delay; override via ARXIV2MD_SLEEP for bulk backfill.
+    time.sleep(float(os.environ.get("ARXIV2MD_SLEEP", "3")))
     resp = requests.get(
         ARXIV2MD_API,
         params={"url": arxiv_id, "remove_refs": "false"},
