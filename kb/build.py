@@ -29,6 +29,23 @@ from kb.refs import parse_references
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "recsys-kb" / "fulltext"
 
 
+def _noop_enrich(arxiv_id: str) -> dict:
+    """Default enrichment: no network, no Semantic Scholar. See ``--enrich``."""
+    return {"references": [], "citation_count": None}
+
+
+def _merge_references(parsed: list[dict], enriched: list[dict]) -> list[dict]:
+    """Append enrichment refs whose title is not already present in ``parsed``."""
+    seen = {(r.get("title") or "").strip().lower() for r in parsed}
+    merged = list(parsed)
+    for ref in enriched:
+        key = (ref.get("title") or "").strip().lower()
+        if key and key not in seen:
+            merged.append(ref)
+            seen.add(key)
+    return merged
+
+
 def build_paper(rec, *, kb_dir, vocab, cache_dir, fetch, extract, enrich) -> list[str]:
     """Read-once pipeline for one paper. Returns the paper's ``concepts_raw``.
 
@@ -43,9 +60,9 @@ def build_paper(rec, *, kb_dir, vocab, cache_dir, fetch, extract, enrich) -> lis
         title=rec.title,
         fulltext=fulltext,
         vocab_hint=list(vocab.keys()),
-        llm=None,
     )
     enrichment = enrich(rec.arxiv_id)
+    references = _merge_references(references, enrichment.get("references") or [])
     concepts, _unmapped = canonicalize(ex.concepts_raw, vocab)
 
     note = render_paper_note(
@@ -92,10 +109,16 @@ def regenerate(kb_dir, vocab) -> None:
     papers: list[dict] = []
     all_raw: list[list[str]] = []
     for note_path in sorted(papers_dir.glob("*.md")):
-        fm = _parse_frontmatter(note_path.read_text(encoding="utf-8"))
-        arxiv_id = note_path.stem  # derive from filename, robust
-        concepts_raw = list(fm.get("concepts_raw") or [])
-        concepts, _unmapped = canonicalize(concepts_raw, vocab)
+        try:
+            fm = _parse_frontmatter(note_path.read_text(encoding="utf-8"))
+            if not isinstance(fm, dict):
+                raise ValueError("frontmatter is not a mapping")
+            arxiv_id = note_path.stem  # derive from filename, robust
+            concepts_raw = list(fm.get("concepts_raw") or [])
+            concepts, _unmapped = canonicalize(concepts_raw, vocab)
+        except Exception as e:  # one corrupt note must not abort the whole run
+            logging.warning("skipping unparseable note %s: %s", note_path.name, e)
+            continue
         papers.append(
             {
                 "arxiv_id": arxiv_id,
@@ -161,13 +184,20 @@ def run_backfill(
     A single failing paper is logged and skipped -- it must never abort the run.
     """
     kb_dir = Path(kb_dir)
+    prior_state = _read_state(kb_dir)
+    prior_failures = list(prior_state.get("failures") or [])
+
     failures: list[str] = []
     built = 0
-    max_issue = 0
+    max_issue = prior_state.get("last_issue", 0) or 0
 
     for i, rec in enumerate(records):
         if limit is not None and i >= limit:
             break
+        # Advance the watermark on ATTEMPT, not success: a transient failure on
+        # the newest paper must not make the next incremental re-fetch old work.
+        if rec.issue is not None:
+            max_issue = max(max_issue, rec.issue)
         try:
             build_paper(
                 rec,
@@ -179,15 +209,21 @@ def run_backfill(
                 enrich=enrich,
             )
             built += 1
-            if rec.issue is not None:
-                max_issue = max(max_issue, rec.issue)
         except Exception as e:  # one bad paper must not abort a 2455-paper run
             logging.warning("build failed for %s: %s", rec.arxiv_id, e)
             failures.append(rec.arxiv_id)
 
     regenerate(kb_dir, vocab)
 
-    summary = {"last_issue": max_issue, "failures": failures, "built": built}
+    # Persist cumulative failures so they stay re-runnable: keep prior failures
+    # whose note is still missing, union this run's failures.
+    papers_dir = kb_dir / "papers"
+    kept_prior = [
+        aid for aid in prior_failures if not (papers_dir / f"{aid}.md").exists()
+    ]
+    all_failures = list(dict.fromkeys([*kept_prior, *failures]))
+
+    summary = {"last_issue": max_issue, "failures": all_failures, "built": built}
     (kb_dir / "state.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
     )
@@ -247,6 +283,8 @@ def main(argv=None) -> None:
     parser.add_argument("--repo")
     parser.add_argument("--incremental", action="store_true")
     parser.add_argument("--canonicalize", action="store_true")
+    parser.add_argument("--retry-failed", action="store_true")
+    parser.add_argument("--enrich", action="store_true")
     parser.add_argument("--since-issue", type=int, default=None)
     parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args(argv)
@@ -261,34 +299,44 @@ def main(argv=None) -> None:
         _git_commit(kb_dir, "chore: re-canonicalize concepts")
         return
 
-    since_issue = args.since_issue
-    if since_issue is None:
-        since_issue = (
-            _read_state(kb_dir).get("last_issue", 0) if args.incremental else 0
-        )
-
     token = os.environ.get("GITHUB_TOKEN")
-    records = iter_issues(args.repo, token, since_issue=since_issue)
+    real_llm = ollama_llm()
 
-    llm = ollama_llm()
-
-    def extract(*, title, fulltext, vocab_hint, llm=llm):
-        return extract_paper(
-            title=title, fulltext=fulltext, vocab_hint=vocab_hint, llm=llm
-        )
+    def _extract(*, title, fulltext, vocab_hint):
+        return extract_paper(title, fulltext, vocab_hint, llm=real_llm)
 
     def fetch(arxiv_id):
         return get_fulltext(arxiv_id, cache_dir=DEFAULT_CACHE_DIR)
 
-    runner = run_incremental if args.incremental else run_backfill
+    # S2 is off by default (its refs were discarded and it burns rate limit);
+    # opt in with --enrich to merge real Semantic Scholar references.
+    enrich = safe_enrich if args.enrich else _noop_enrich
+
+    if args.retry_failed:
+        failed = set(_read_state(kb_dir).get("failures") or [])
+        records = (
+            rec
+            for rec in iter_issues(args.repo, token, since_issue=0)
+            if rec.arxiv_id in failed
+        )
+        runner = run_backfill
+    else:
+        since_issue = args.since_issue
+        if since_issue is None:
+            since_issue = (
+                _read_state(kb_dir).get("last_issue", 0) if args.incremental else 0
+            )
+        records = iter_issues(args.repo, token, since_issue=since_issue)
+        runner = run_incremental if args.incremental else run_backfill
+
     summary = runner(
         records,
         kb_dir=kb_dir,
         vocab=vocab,
         cache_dir=DEFAULT_CACHE_DIR,
         fetch=fetch,
-        extract=extract,
-        enrich=safe_enrich,
+        extract=_extract,
+        enrich=enrich,
         limit=args.limit,
     )
     logging.info("built=%s failures=%s", summary["built"], len(summary["failures"]))

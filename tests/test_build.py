@@ -67,7 +67,7 @@ def test_run_backfill_smoke(tmp_path):
         "2602.00002": ["cold start"],
     }
 
-    def extract(*, title, fulltext, vocab_hint, llm):
+    def extract(*, title, fulltext, vocab_hint):
         # find the record whose title matches
         for r in records:
             if r.title == title:
@@ -106,7 +106,7 @@ def test_run_backfill_survives_one_failure(tmp_path):
             raise RuntimeError("boom fetch")
         return "# body\n## References\n- R"
 
-    def extract(*, title, fulltext, vocab_hint, llm):
+    def extract(*, title, fulltext, vocab_hint):
         return Extraction(["two-tower"], "T.")
 
     summary = run_backfill(
@@ -165,3 +165,195 @@ def test_regenerate_is_pure(tmp_path):
     # sanity: boom never invoked (no fetch/extract/enrich params accepted)
     with pytest.raises(AssertionError):
         boom()
+
+
+# --- C1: real LLM must reach the extractor -------------------------------
+
+
+def test_build_paper_passes_llm_to_extractor(tmp_path):
+    # build_paper must NOT inject llm=None; it just forwards the kwargs it owns.
+    rec = _rec("2601.00001", "Paper One", "two-tower")
+    vocab = {"two-tower-retrieval": ["two-tower"]}
+
+    def extract(*, title, fulltext, vocab_hint):
+        # If build_paper ever passed llm=None this signature would raise
+        # TypeError (unexpected kwarg), so a successful call proves the fix.
+        return Extraction(["two-tower"], "T.")
+
+    raw = build_paper(
+        rec,
+        kb_dir=tmp_path,
+        vocab=vocab,
+        cache_dir=tmp_path / ".cache",
+        fetch=lambda i: "# body\n## References\n- R",
+        extract=extract,
+        enrich=lambda i: {"references": [], "citation_count": None},
+    )
+    assert (tmp_path / "papers" / "2601.00001.md").exists()
+    assert raw == ["two-tower"]
+
+
+def test_run_backfill_all_fail_is_visible(tmp_path):
+    # Documents the empty-KB signature: if extract raises for ALL records,
+    # built==0 and every record is a failure (not silently swallowed to empty).
+    records = [_rec("2601.00001", "One", "x"), _rec("2602.00002", "Two", "y")]
+    vocab = {}
+
+    def extract(*, title, fulltext, vocab_hint):
+        raise RuntimeError("llm down")
+
+    run_backfill(
+        records,
+        kb_dir=tmp_path,
+        vocab=vocab,
+        cache_dir=tmp_path / ".cache",
+        fetch=lambda i: "# body\n## References\n- R",
+        extract=extract,
+        enrich=lambda i: {"references": [], "citation_count": None},
+    )
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["built"] == 0
+    assert len(state["failures"]) == len(records)
+
+
+# --- I2: advance watermark on ATTEMPT, not success -----------------------
+
+
+def test_watermark_advances_on_failure(tmp_path):
+    # Two records (issues 10 and 20); fetch raises for issue 20. The watermark
+    # must still advance to 20 so the next incremental doesn't re-fetch old work.
+    r10 = PaperRecord(
+        arxiv_id="2601.00010",
+        title="Ten",
+        year=2026,
+        companies=[],
+        url="u",
+        issue=10,
+        summary="S.",
+    )
+    r20 = PaperRecord(
+        arxiv_id="2602.00020",
+        title="Twenty",
+        year=2026,
+        companies=[],
+        url="u",
+        issue=20,
+        summary="S.",
+    )
+    vocab = {}
+
+    def fetch(i):
+        if i == "2602.00020":
+            raise RuntimeError("boom fetch")
+        return "# body\n## References\n- R"
+
+    def extract(*, title, fulltext, vocab_hint):
+        return Extraction([], "T.")
+
+    run_backfill(
+        [r10, r20],
+        kb_dir=tmp_path,
+        vocab=vocab,
+        cache_dir=tmp_path / ".cache",
+        fetch=fetch,
+        extract=extract,
+        enrich=lambda i: {"references": [], "citation_count": None},
+    )
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["last_issue"] == 20
+
+
+# --- I3: don't call S2 by default; merge S2 refs when enrichment provided --
+
+
+def test_build_paper_merges_enrichment_references(tmp_path):
+    # enrich returns an S2 ref with a title not present in the parsed refs; it
+    # must be MERGED into the rendered note (not discarded).
+    rec = _rec("2601.00001", "Paper One", "two-tower")
+    vocab = {}
+
+    def enrich(i):
+        return {
+            "references": [
+                {"title": "S2 Only Ref", "arxiv_id": "9999.99999", "year": 2020}
+            ],
+            "citation_count": None,
+        }
+
+    build_paper(
+        rec,
+        kb_dir=tmp_path,
+        vocab=vocab,
+        cache_dir=tmp_path / ".cache",
+        fetch=lambda i: "# body\n## References\n- Parsed Ref arXiv:1234.56789",
+        extract=_fake_extract(["two-tower"]),
+        enrich=enrich,
+    )
+    text = (tmp_path / "papers" / "2601.00001.md").read_text()
+    assert "Parsed Ref" in text  # parsed ref preserved
+    assert "S2 Only Ref" in text  # S2 ref merged in
+    assert "9999.99999" in text
+
+
+def test_backfill_does_not_call_s2_by_default():
+    # The default enrich wired in main() must be a no-op that returns empty
+    # references / None citation and performs NO network call.
+    from kb.build import _noop_enrich
+
+    result = _noop_enrich("2601.00001")
+    assert result == {"references": [], "citation_count": None}
+
+
+# --- I1: make failures re-runnable ---------------------------------------
+
+
+def test_failures_persist_until_note_exists(tmp_path):
+    # Seed a prior failure whose note does not exist; an unrelated incremental
+    # build must keep that old failure in state.json (don't lose it).
+    (tmp_path / "state.json").write_text(
+        json.dumps({"last_issue": 5, "failures": ["2599.09999"], "built": 3}),
+        encoding="utf-8",
+    )
+    rec = _rec("2601.00001", "New Paper", "two-tower")
+    vocab = {"two-tower-retrieval": ["two-tower"]}
+
+    run_backfill(
+        [rec],
+        kb_dir=tmp_path,
+        vocab=vocab,
+        cache_dir=tmp_path / ".cache",
+        fetch=lambda i: "# body\n## References\n- R",
+        extract=_fake_extract(["two-tower"]),
+        enrich=lambda i: {"references": [], "citation_count": None},
+    )
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert "2599.09999" in state["failures"]
+
+
+# --- M1: per-note resilience in regenerate -------------------------------
+
+
+def test_regenerate_skips_corrupt_note(tmp_path):
+    from kb.build import regenerate
+
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir(parents=True)
+    # one valid note
+    valid = build_paper(
+        _rec("2601.00001", "Valid", "two-tower"),
+        kb_dir=tmp_path,
+        vocab={"two-tower-retrieval": ["two-tower"]},
+        cache_dir=tmp_path / ".cache",
+        fetch=lambda i: "# body\n## References\n- R",
+        extract=_fake_extract(["two-tower"]),
+        enrich=lambda i: {"references": [], "citation_count": None},
+    )
+    assert valid == ["two-tower"]
+    # one corrupt note
+    (papers_dir / "2602.00002.md").write_text("---\n:bad yaml\n---\n", encoding="utf-8")
+
+    regenerate(tmp_path, {"two-tower-retrieval": ["two-tower"]})
+
+    index_lines = (tmp_path / "index.jsonl").read_text().strip().splitlines()
+    ids = [json.loads(line)["arxiv_id"] for line in index_lines]
+    assert "2601.00001" in ids
