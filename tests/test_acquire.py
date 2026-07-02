@@ -1,5 +1,12 @@
 # tests/test_acquire.py
-from kb.acquire import get_fulltext
+from kb.acquire import _looks_thin, get_fulltext
+
+
+def test_looks_thin():
+    assert _looks_thin("")
+    assert _looks_thin("   \n  ")
+    assert _looks_thin("short arXiv boilerplate stub with no body")
+    assert not _looks_thin("x" * 1000)
 
 
 def test_uses_cache_and_fetcher(tmp_path):
