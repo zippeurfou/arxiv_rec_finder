@@ -7,6 +7,38 @@ from kb.extract import Extraction
 from kb.issues import PaperRecord
 
 
+def test_regenerate_uses_vocab_intro(tmp_path):
+    rec = PaperRecord(
+        arxiv_id="2606.31031",
+        title="GenPage",
+        year=2026,
+        companies=["Netflix"],
+        url="u",
+        issue=2457,
+        summary="S.",
+    )
+    vocab = {
+        "two-tower-retrieval": {
+            "aliases": ["two-tower"],
+            "intro": "Separate user and item encoders scored by dot product.",
+        }
+    }
+    build_paper(
+        rec,
+        kb_dir=tmp_path,
+        vocab=vocab,
+        fetch=lambda i: "# body",
+        extract=_fake_extract(["two-tower"]),
+        enrich=lambda i: {"references": [], "citation_count": None},
+    )
+    run_canonicalize(kb_dir=tmp_path, vocab=vocab)
+    note = (tmp_path / "concepts" / "two-tower-retrieval.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Separate user and item encoders" in note  # intro rendered
+    assert "[[2606.31031]]" in note  # backlink
+
+
 def _fake_extract(concepts_raw, note="T."):
     def _extract(**kwargs):
         return Extraction(list(concepts_raw), note)
@@ -29,7 +61,6 @@ def test_build_paper_writes_note_and_returns_raw(tmp_path):
         rec,
         kb_dir=tmp_path,
         vocab=vocab,
-        cache_dir=tmp_path / ".cache",
         fetch=lambda i: "# body\n## References\n- R arXiv:1234.56789",
         extract=_fake_extract(["two-tower", "novel"]),
         enrich=lambda i: {"references": [], "citation_count": None},
@@ -78,7 +109,6 @@ def test_run_backfill_smoke(tmp_path):
         records,
         kb_dir=tmp_path,
         vocab=vocab,
-        cache_dir=tmp_path / ".cache",
         fetch=fetch,
         extract=extract,
         enrich=lambda i: {"references": [], "citation_count": None},
@@ -113,7 +143,6 @@ def test_run_backfill_survives_one_failure(tmp_path):
         [good, bad],
         kb_dir=tmp_path,
         vocab=vocab,
-        cache_dir=tmp_path / ".cache",
         fetch=fetch,
         extract=extract,
         enrich=lambda i: {"references": [], "citation_count": None},
@@ -137,7 +166,6 @@ def test_regenerate_is_pure(tmp_path):
         [rec],
         kb_dir=tmp_path,
         vocab=vocab,
-        cache_dir=tmp_path / ".cache",
         fetch=lambda i: "# body\n## References\n- R",
         extract=_fake_extract(["novel-idea"]),
         enrich=lambda i: {"references": [], "citation_count": None},
@@ -184,7 +212,6 @@ def test_build_paper_passes_llm_to_extractor(tmp_path):
         rec,
         kb_dir=tmp_path,
         vocab=vocab,
-        cache_dir=tmp_path / ".cache",
         fetch=lambda i: "# body\n## References\n- R",
         extract=extract,
         enrich=lambda i: {"references": [], "citation_count": None},
@@ -206,7 +233,6 @@ def test_run_backfill_all_fail_is_visible(tmp_path):
         records,
         kb_dir=tmp_path,
         vocab=vocab,
-        cache_dir=tmp_path / ".cache",
         fetch=lambda i: "# body\n## References\n- R",
         extract=extract,
         enrich=lambda i: {"references": [], "citation_count": None},
@@ -254,7 +280,6 @@ def test_watermark_advances_on_failure(tmp_path):
         [r10, r20],
         kb_dir=tmp_path,
         vocab=vocab,
-        cache_dir=tmp_path / ".cache",
         fetch=fetch,
         extract=extract,
         enrich=lambda i: {"references": [], "citation_count": None},
@@ -284,7 +309,6 @@ def test_build_paper_merges_enrichment_references(tmp_path):
         rec,
         kb_dir=tmp_path,
         vocab=vocab,
-        cache_dir=tmp_path / ".cache",
         fetch=lambda i: "# body\n## References\n- Parsed Ref arXiv:1234.56789",
         extract=_fake_extract(["two-tower"]),
         enrich=enrich,
@@ -321,7 +345,6 @@ def test_failures_persist_until_note_exists(tmp_path):
         [rec],
         kb_dir=tmp_path,
         vocab=vocab,
-        cache_dir=tmp_path / ".cache",
         fetch=lambda i: "# body\n## References\n- R",
         extract=_fake_extract(["two-tower"]),
         enrich=lambda i: {"references": [], "citation_count": None},
@@ -343,7 +366,6 @@ def test_regenerate_skips_corrupt_note(tmp_path):
         _rec("2601.00001", "Valid", "two-tower"),
         kb_dir=tmp_path,
         vocab={"two-tower-retrieval": ["two-tower"]},
-        cache_dir=tmp_path / ".cache",
         fetch=lambda i: "# body\n## References\n- R",
         extract=_fake_extract(["two-tower"]),
         enrich=lambda i: {"references": [], "citation_count": None},
