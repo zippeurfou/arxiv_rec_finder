@@ -8,15 +8,31 @@ def _norm(s: str) -> str:
     return " ".join(s.lower().replace("-", " ").split())
 
 
-def load_vocab(path: Path) -> dict[str, list[str]]:
+def load_vocab(path: Path) -> dict:
+    """Load vocabulary.yaml. Each value is either a list of aliases (legacy form)
+    or a mapping ``{aliases: [...], intro: "..."}``. Both are supported."""
     return yaml.safe_load(Path(path).read_text()) or {}
 
 
-def _alias_index(vocab: dict[str, list[str]]) -> dict[str, str]:
+def aliases_of(value) -> list[str]:
+    """Aliases for a vocab entry, accepting the legacy list or the mapping form."""
+    if isinstance(value, dict):
+        return list(value.get("aliases") or [])
+    return list(value or [])
+
+
+def intro_of(value) -> str:
+    """Intro/description for a vocab entry (empty for the legacy list form)."""
+    if isinstance(value, dict):
+        return value.get("intro") or ""
+    return ""
+
+
+def _alias_index(vocab: dict) -> dict[str, str]:
     idx = {}
-    for slug, aliases in vocab.items():
+    for slug, value in vocab.items():
         idx[_norm(slug)] = slug
-        for a in aliases:
+        for a in aliases_of(value):
             idx[_norm(a)] = slug
     return idx
 

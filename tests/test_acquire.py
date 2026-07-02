@@ -1,5 +1,68 @@
 # tests/test_acquire.py
-from kb.acquire import get_fulltext
+from kb.acquire import _looks_thin, get_fulltext
+
+
+def test_looks_thin():
+    assert _looks_thin("")
+    assert _looks_thin("   \n  ")
+    assert _looks_thin("short arXiv boilerplate stub with no body")
+    assert not _looks_thin("x" * 1000)
+
+
+class _Resp:
+    def __init__(self, text="", content=b""):
+        self.text = text
+        self.content = content
+        self.encoding = ""
+
+    def raise_for_status(self):
+        pass
+
+
+def test_pdf_fulltext_success(monkeypatch):
+    import kb.acquire as A
+
+    monkeypatch.setattr(A.requests, "get", lambda *a, **k: _Resp(content=b"%PDF"))
+
+    class _P:
+        returncode = 0
+        stdout = "x" * 1000
+
+    monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: _P())
+    assert len(A._pdf_fulltext("1234.56789")) == 1000
+
+
+def test_pdf_fulltext_failure_returns_empty(monkeypatch):
+    import kb.acquire as A
+
+    def boom(*a, **k):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(A.requests, "get", boom)
+    assert A._pdf_fulltext("1234.56789") == ""
+
+
+def test_default_fetcher_falls_back_to_pdf_when_thin(monkeypatch):
+    import kb.acquire as A
+
+    monkeypatch.setattr(A.time, "sleep", lambda s: None)
+    monkeypatch.setattr(A.requests, "get", lambda *a, **k: _Resp(text="thin stub"))
+    monkeypatch.setattr(A, "_pdf_fulltext", lambda i: "y" * 1000)
+    assert A._default_fetcher("1234.56789") == "y" * 1000
+
+
+def test_default_fetcher_keeps_arxiv2md_when_substantial(monkeypatch):
+    import kb.acquire as A
+
+    body = "z" * 1000
+    monkeypatch.setattr(A.time, "sleep", lambda s: None)
+    monkeypatch.setattr(A.requests, "get", lambda *a, **k: _Resp(text=body))
+
+    def _must_not_run(i):
+        raise AssertionError("PDF fallback should not run for substantial text")
+
+    monkeypatch.setattr(A, "_pdf_fulltext", _must_not_run)
+    assert A._default_fetcher("1234.56789") == body
 
 
 def test_uses_cache_and_fetcher(tmp_path):

@@ -19,12 +19,19 @@ from pathlib import Path
 import yaml
 
 from kb.acquire import get_fulltext
-from kb.canonicalize import canonicalize, load_vocab, unmapped_report
+from kb.canonicalize import (
+    aliases_of,
+    canonicalize,
+    intro_of,
+    load_vocab,
+    unmapped_report,
+)
 from kb.enrich import safe_enrich
 from kb.extract import extract_paper, ollama_llm
 from kb.issues import iter_issues
 from kb.notes import index_line, render_concept_note, render_paper_note
 from kb.refs import parse_references
+from kb.relevance import is_recsys_relevant
 
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "recsys-kb" / "fulltext"
 
@@ -46,7 +53,7 @@ def _merge_references(parsed: list[dict], enriched: list[dict]) -> list[dict]:
     return merged
 
 
-def build_paper(rec, *, kb_dir, vocab, cache_dir, fetch, extract, enrich) -> list[str]:
+def build_paper(rec, *, kb_dir, vocab, fetch, extract, enrich) -> list[str]:
     """Read-once pipeline for one paper. Returns the paper's ``concepts_raw``.
 
     Composes fetch -> parse_references -> extract -> enrich -> canonicalize ->
@@ -145,8 +152,8 @@ def regenerate(kb_dir, vocab) -> None:
     for slug, slug_papers in slug_to_papers.items():
         note = render_concept_note(
             slug=slug,
-            aliases=list(vocab.get(slug, [])),
-            intro="",
+            aliases=aliases_of(vocab.get(slug)),
+            intro=intro_of(vocab.get(slug)),
             papers=slug_papers,
         )
         (concepts_dir / f"{slug}.md").write_text(note, encoding="utf-8")
@@ -176,9 +183,7 @@ def regenerate(kb_dir, vocab) -> None:
     )
 
 
-def run_backfill(
-    records, *, kb_dir, vocab, cache_dir, fetch, extract, enrich, limit=None
-) -> dict:
+def run_backfill(records, *, kb_dir, vocab, fetch, extract, enrich, limit=None) -> dict:
     """Build every record (per-paper try/except), then regenerate + write state.
 
     A single failing paper is logged and skipped -- it must never abort the run.
@@ -203,7 +208,6 @@ def run_backfill(
                 rec,
                 kb_dir=kb_dir,
                 vocab=vocab,
-                cache_dir=cache_dir,
                 fetch=fetch,
                 extract=extract,
                 enrich=enrich,
@@ -231,14 +235,13 @@ def run_backfill(
 
 
 def run_incremental(
-    records, *, kb_dir, vocab, cache_dir, fetch, extract, enrich, limit=None
+    records, *, kb_dir, vocab, fetch, extract, enrich, limit=None
 ) -> dict:
     """Same pipeline as backfill; callers filter ``records`` by ``since_issue``."""
     return run_backfill(
         records,
         kb_dir=kb_dir,
         vocab=vocab,
-        cache_dir=cache_dir,
         fetch=fetch,
         extract=extract,
         enrich=enrich,
@@ -440,7 +443,10 @@ def _iter_records(args, kb_dir, token):
         since_issue = (
             _read_state(kb_dir).get("last_issue", 0) if args.incremental else 0
         )
-    return iter_issues(args.repo, token, since_issue=since_issue)
+    records = iter_issues(args.repo, token, since_issue=since_issue)
+    if getattr(args, "recsys_only", False):
+        records = (r for r in records if is_recsys_relevant(r.title, r.summary))
+    return records
 
 
 def _cmd_prepare(parser, args) -> None:
@@ -536,7 +542,6 @@ def _cmd_autonomous(parser, args) -> None:
         records,
         kb_dir=kb_dir,
         vocab=vocab,
-        cache_dir=DEFAULT_CACHE_DIR,
         fetch=fetch,
         extract=_extract,
         enrich=enrich,
@@ -553,6 +558,11 @@ def _add_selection_args(sub) -> None:
     sub.add_argument("--since-issue", type=int, default=None)
     sub.add_argument("--limit", type=int, default=None)
     sub.add_argument("--retry-failed", action="store_true")
+    sub.add_argument(
+        "--recsys-only",
+        action="store_true",
+        help="keep only papers whose title/summary shows a recsys signal",
+    )
 
 
 def main(argv=None) -> None:
