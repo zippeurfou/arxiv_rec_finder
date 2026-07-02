@@ -26,10 +26,3 @@ dev = [
 
 [tool.uv.sources]
 cloudscraper = { git = "https://github.com/VeNoMouS/cloudscraper.git", rev = "3.0.0" }
-
-[[tool.uv.index]]
-url = "https://grubhub.jfrog.io/artifactory/api/pypi/pypi-testing/simple"
-
-[[tool.uv.index]]
-url = "https://grubhub.jfrog.io/artifactory/api/pypi/pypi/simple"
-default = true
