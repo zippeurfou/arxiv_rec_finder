@@ -35,7 +35,7 @@ _SIGNALS = [
     r"candidate generation",
     r"user (behavior|behaviour|engagement|interest)",
     r"e[- ]?commerce",
-    r"\bads?\b",
+    r"\b(ad|ads) (rank|ranking|click|targeting|recommendation|serving|creative|auction|allocation)\b",
     r"advertis\w*",
     r"sponsored",
     r"feed ranking",

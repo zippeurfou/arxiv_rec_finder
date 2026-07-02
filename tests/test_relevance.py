@@ -19,3 +19,5 @@ def test_relevant_negatives():
         "Protein-ligand binding free energy", "molecular dynamics"
     )
     assert not is_recsys_relevant("Video diffusion for text to image", "")
+    # bare "ad"/"AD" must NOT trigger (no false positive on ad hoc / auto-diff)
+    assert not is_recsys_relevant("Ad hoc theorem proving", "reverse-mode AD")
