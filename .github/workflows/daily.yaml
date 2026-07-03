@@ -46,9 +46,16 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if [ -f state/email_cache.jsonl ]; then
+            # safe here: the bot run has finished, so no concurrent appends
+            uv run python -c "import cache; cache.compact('state/email_cache.jsonl')"
             git add state/email_cache.jsonl
-            git commit -m "chore: update email cache [skip ci]" || echo "no cache changes"
-            git push || echo "nothing to push"
+            if git commit -m "chore: update email cache [skip ci]"; then
+              # rebase on any concurrent change, then push (fail loudly if it can't)
+              git pull --rebase origin "${GITHUB_REF_NAME}"
+              git push
+            else
+              echo "no cache changes to commit"
+            fi
           else
             echo "no cache file to commit"
           fi
