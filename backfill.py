@@ -44,10 +44,89 @@ def iter_all(query, category, since, until=None, page_size=1000):
     start = 0
     while True:
         entries = _fetch_page(query, category, start, page_size, since, until)
+        logging.debug(
+            "iter_all: category=%s start=%s entries=%d",
+            category,
+            start,
+            len(entries),
+        )
         if not entries:
             return
         yield from entries
         start += page_size
+
+
+def _process_entry(
+    entry,
+    cache,
+    tech_domains,
+    seen,
+    repo,
+    token,
+    processed_ids,
+    cache_path=CACHE_PATH,
+    download=True,
+):
+    """Process ONE arXiv entry: cache lookup/download, decide, file issue.
+
+    Extracted from ``run()`` so it is unit-testable and shares the per-entry
+    logic that ``main.process_entries`` implements for the daily path.
+
+    - ``processed_ids`` gives cross-category dedup *within this run* (an id
+      seen in an earlier category is skipped without re-processing).
+    - The issue-filing block is wrapped in try/except so a single
+      GitHub/summarize failure logs a warning and continues rather than
+      aborting a multi-hour backfill. ``seen`` is updated only on success.
+    """
+    aid = extract_arxiv_id(entry.id) or entry.id
+    if aid in processed_ids:
+        return
+    processed_ids.add(aid)
+
+    if aid in cache:
+        rec = cache[aid]
+    else:
+        if download:
+            try:
+                emails = extract_emails_from_arxiv_pdf(entry.id.rsplit("/", 1)[-1])
+            except Exception as e:
+                logging.warning(f"{aid}: {e}")
+                emails = []
+        else:
+            emails = []
+        # Parity with the Phase-5 daily path: populate affiliations from
+        # the author metadata so backfill records have identical shape
+        # and signals to daily records.
+        try:
+            affs = list(extract_affiliations(entry))
+        except Exception:
+            affs = []
+        rec = {
+            "arxiv_id": aid,
+            "title": entry.title,
+            "published": entry.published,
+            "url": entry.link,
+            "affiliations": affs,
+            "emails": emails,
+            "checked": date.today().isoformat(),
+        }
+        cache[aid] = rec
+        append_record(cache_path, rec)  # checkpoint every paper
+
+    companies = decide_companies(rec["affiliations"], rec["emails"], tech_domains)
+    if companies and rec["url"] not in seen:
+        try:
+            fe = FakeEntry(
+                id=rec["url"],
+                title=rec["title"],
+                published=rec["published"],
+                link=rec["url"],
+                companies=companies,
+            )
+            create_issue(repo, token, fe, summarize_with_ollama(fe.title, ""))
+            seen.add(rec["url"])
+        except Exception as e:
+            logging.warning(f"{aid}: issue filing failed: {e}")
 
 
 def run(since, until=None, max_workers=6):
@@ -73,47 +152,10 @@ def run(since, until=None, max_workers=6):
     lo = _to_stamp(since)
     hi = _to_stamp(until, end=True) if until else None
 
+    processed_ids = set()
     for cat in cats:
         for entry in iter_all(query, cat, lo, hi):
-            aid = extract_arxiv_id(entry.id) or entry.id
-            if aid in cache:
-                rec = cache[aid]
-            else:
-                try:
-                    emails = extract_emails_from_arxiv_pdf(entry.id.rsplit("/", 1)[-1])
-                except Exception as e:
-                    logging.warning(f"{aid}: {e}")
-                    emails = []
-                # Parity with the Phase-5 daily path: populate affiliations from
-                # the author metadata so backfill records have identical shape
-                # and signals to daily records.
-                try:
-                    affs = list(extract_affiliations(entry))
-                except Exception:
-                    affs = []
-                rec = {
-                    "arxiv_id": aid,
-                    "title": entry.title,
-                    "published": entry.published,
-                    "url": entry.link,
-                    "affiliations": affs,
-                    "emails": emails,
-                    "checked": date.today().isoformat(),
-                }
-                cache[aid] = rec
-                append_record(CACHE_PATH, rec)  # checkpoint every paper
-
-            companies = decide_companies(rec["affiliations"], rec["emails"], domains)
-            if companies and rec["url"] not in seen:
-                fe = FakeEntry(
-                    id=rec["url"],
-                    title=rec["title"],
-                    published=rec["published"],
-                    link=rec["url"],
-                    companies=companies,
-                )
-                create_issue(repo, token, fe, summarize_with_ollama(fe.title, ""))
-                seen.add(rec["url"])
+            _process_entry(entry, cache, domains, seen, repo, token, processed_ids)
 
 
 if __name__ == "__main__":
