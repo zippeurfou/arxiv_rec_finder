@@ -108,6 +108,7 @@ def _process_entry(
             "url": entry.link,
             "affiliations": affs,
             "emails": emails,
+            "abstract": getattr(entry, "summary", ""),
             "checked": date.today().isoformat(),
         }
         cache[aid] = rec
@@ -123,7 +124,12 @@ def _process_entry(
                 link=rec["url"],
                 companies=companies,
             )
-            create_issue(repo, token, fe, summarize_with_ollama(fe.title, ""))
+            create_issue(
+                repo,
+                token,
+                fe,
+                summarize_with_ollama(fe.title, rec.get("abstract", "")),
+            )
             seen.add(rec["url"])
         except Exception as e:
             logging.warning(f"{aid}: issue filing failed: {e}")

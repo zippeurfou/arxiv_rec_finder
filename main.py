@@ -112,6 +112,7 @@ def process_entries(
                 "url": entry.link,
                 "affiliations": sig["affiliations"],
                 "emails": sig["emails"],
+                "abstract": getattr(entry, "summary", ""),
                 "checked": date.today().isoformat(),
             }
             cache[aid] = rec
@@ -120,11 +121,17 @@ def process_entries(
 
         companies = decide_companies(sig["affiliations"], sig["emails"], tech_domains)
         if companies and entry.link not in seen_ids:
-            entry.companies = companies
-            summary = summarize_with_ollama(entry.title, getattr(entry, "summary", ""))
-            create_issue(repo, token, entry, summary)
-            seen_ids.add(entry.link)
-            logging.info(f"✅ Issue for arXiv paper: {entry.title}")
+            try:
+                entry.companies = companies
+                summary = summarize_with_ollama(
+                    entry.title, getattr(entry, "summary", "")
+                )
+                create_issue(repo, token, entry, summary)
+                seen_ids.add(entry.link)
+                logging.info(f"✅ Issue for arXiv paper: {entry.title}")
+            except Exception as e:
+                logging.warning(f"failed to file issue for {aid}: {e}")
+                continue
 
 
 def redecide_cache(cache, tech_domains, seen_ids, repo, token):
@@ -156,7 +163,7 @@ def redecide_cache(cache, tech_domains, seen_ids, repo, token):
                     link=url,
                     companies=companies,
                 )
-                summary = summarize_with_ollama(fe.title, "")
+                summary = summarize_with_ollama(fe.title, rec.get("abstract", ""))
                 create_issue(repo, token, fe, summary)
                 seen_ids.add(url)
                 logging.info(f"✅ Retroactive issue for cached paper: {fe.title}")

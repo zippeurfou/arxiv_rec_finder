@@ -6,11 +6,12 @@ import backfill as B
 class _Entry:
     """Minimal feedparser-like entry stub."""
 
-    def __init__(self, id, title="T", published="2025-01-01", link=None):
+    def __init__(self, id, title="T", published="2025-01-01", link=None, summary=""):
         self.id = id
         self.title = title
         self.published = published
         self.link = link or id
+        self.summary = summary
 
 
 def test_iter_pages_stops_on_empty(monkeypatch):
@@ -60,7 +61,9 @@ def test_process_entry_cache_miss_downloads_appends_issues(monkeypatch, tmp_path
     monkeypatch.setattr(
         B, "extract_emails_from_arxiv_pdf", lambda arxiv_id: ["x@uber.com"]
     )
-    entry = _Entry("http://arxiv.org/abs/2501.00001v1")
+    entry = _Entry(
+        "http://arxiv.org/abs/2501.00001v1", summary="Backfill abstract text."
+    )
     aid = B.extract_arxiv_id(entry.id) or entry.id
 
     cache = {}
@@ -85,6 +88,7 @@ def test_process_entry_cache_miss_downloads_appends_issues(monkeypatch, tmp_path
     assert aid in on_disk
     assert on_disk[aid]["emails"] == ["x@uber.com"]
     assert on_disk[aid]["url"] == entry.link
+    assert on_disk[aid]["abstract"] == "Backfill abstract text."
 
 
 def test_process_entry_cache_hit_no_download(monkeypatch, tmp_path):
