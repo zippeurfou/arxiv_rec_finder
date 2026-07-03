@@ -75,7 +75,9 @@ def _paced_get(url: str) -> bytes:
 
 
 def _build_query(query, category, start, max_results, since=None, until=None):
-    parts = [f"all:{quote_plus(query)}", f"cat:{quote_plus(category)}"]
+    # Parenthesize the OR group: arXiv binds AND tighter than OR, so without the
+    # parens the cat:/submittedDate: filters would only apply to the last OR term.
+    parts = [f"all:({quote_plus(query)})", f"cat:{quote_plus(category)}"]
     if since or until:
         lo = since or "197001010000"
         hi = until or "299912312359"

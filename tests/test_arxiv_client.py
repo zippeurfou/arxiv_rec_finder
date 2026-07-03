@@ -36,12 +36,22 @@ def test_paced_get_enforces_min_interval(monkeypatch):
 
 def test_build_query_basic_no_dates():
     q = ac._build_query("a b", "cs.IR", 0, 400)
-    assert "all:a+b" in q  # quote_plus encodes the space in the multi-word query
+    # OR group MUST be parenthesized so AND (cat/date) binds to the whole group,
+    # not just the last OR term (arXiv: AND binds tighter than OR).
+    assert "all:(a+b)" in q
     assert "cat:cs.IR" in q
     assert "start=0" in q
     assert "max_results=400" in q
     assert "sortBy=submittedDate&sortOrder=descending" in q
     assert "submittedDate:[" not in q  # no date range when neither bound given
+
+
+def test_build_query_parenthesizes_or_group_before_and():
+    # regression guard: the multi-term OR query is wrapped in all:(...) and the
+    # AND filters come *after* the closing paren.
+    q = ac._build_query("recommender OR ranking", "cs.IR", 0, 10, since="202501010000")
+    assert "all:(recommender+OR+ranking)+AND+cat:cs.IR" in q
+    assert "+AND+submittedDate:[202501010000" in q
 
 
 def test_build_query_since_and_until():
