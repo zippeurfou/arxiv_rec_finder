@@ -9,7 +9,11 @@ from tqdm import tqdm
 from arxiv_client import get_recent_arxiv_papers
 from arxiv_parser import extract_emails_from_arxiv_pdf
 from cache import append_record, load_cache
-from filter_affiliations import decide_companies, get_signals_cached
+from filter_affiliations import (
+    decide_companies,
+    extract_affiliations,
+    get_signals_cached,
+)
 from kb.ids import extract_arxiv_id
 from notifier import create_issue
 from store import load_seen_from_issues
@@ -71,7 +75,7 @@ def process_entries(
     then file GitHub issues for matches that haven't been seen yet.
 
     For every entry:
-      - skip if its raw id is already in `seen_ids`
+      - skip if its link is already in `seen_ids`
       - normalize to an arXiv id and get signals from the cache (or download the
         PDF via `extract_emails_from_arxiv_pdf` unless `download=False`)
       - on a cache miss while downloading, build + store a cache record and
@@ -87,11 +91,18 @@ def process_entries(
         unit="paper",
         leave=False,
     ):
-        if entry.id in seen_ids:
+        if entry.link in seen_ids:
             continue
 
         aid = extract_arxiv_id(entry.id) or entry.id
-        sig = get_signals_cached(aid, cache, pdf_fn)
+        # extract_affiliations() calls entry.get("authors", []); guard plain
+        # objects that lack .get so a new paper's affiliation metadata is still
+        # honored (parity with the old has_big_tech_author pass-1).
+        try:
+            affs = list(extract_affiliations(entry))
+        except Exception:
+            affs = []
+        sig = get_signals_cached(aid, cache, pdf_fn, affiliations=affs)
 
         if aid not in cache and download:
             rec = {
@@ -137,17 +148,21 @@ def redecide_cache(cache, tech_domains, seen_ids, repo, token):
             rec.get("affiliations", []), rec.get("emails", []), tech_domains
         )
         if companies:
-            fe = FakeEntry(
-                id=url,
-                title=rec.get("title", aid),
-                published=rec.get("published", ""),
-                link=url,
-                companies=companies,
-            )
-            summary = summarize_with_ollama(fe.title, "")
-            create_issue(repo, token, fe, summary)
-            seen_ids.add(url)
-            logging.info(f"✅ Retroactive issue for cached paper: {fe.title}")
+            try:
+                fe = FakeEntry(
+                    id=url,
+                    title=rec.get("title", aid),
+                    published=rec.get("published", ""),
+                    link=url,
+                    companies=companies,
+                )
+                summary = summarize_with_ollama(fe.title, "")
+                create_issue(repo, token, fe, summary)
+                seen_ids.add(url)
+                logging.info(f"✅ Retroactive issue for cached paper: {fe.title}")
+            except Exception as e:
+                logging.warning(f"failed to file retroactive issue for {aid}: {e}")
+                continue
 
 
 def process_substack_users(config, seen_ids, repo, token):

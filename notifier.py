@@ -37,6 +37,15 @@ def _ensure_label(repo, label_name: str) -> None:
             raise
 
 
+def _labels(year: str, companies) -> list[str]:
+    """Build the label list from year + companies, dropping empty/falsy names.
+
+    GitHub rejects empty label names (422), so an empty `year` (e.g. when
+    `entry.published` is missing) or any blank company must be filtered out.
+    """
+    return [lbl for lbl in ([year] + list(companies or [])) if lbl]
+
+
 def create_issue(repo_name: str, token: str, entry, summary: str):
     """
     Create a GitHub issue for the given arXiv entry with the provided summary.
@@ -55,7 +64,7 @@ def create_issue(repo_name: str, token: str, entry, summary: str):
     # Build “year” and each company label
     year = entry.published[:4]
     companies = entry.companies or []
-    labels = [year] + companies
+    labels = _labels(year, companies)
 
     # 1) ensure each label exists (with a nice color)
     for lbl in labels:
