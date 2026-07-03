@@ -1,0 +1,24 @@
+name: write-test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  write-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Write a state file
+        run: |
+          mkdir -p state
+          echo "write-test $(date -u +%FT%TZ) run=${{ github.run_id }}" >> state/_write_test.txt
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/_write_test.txt
+          git commit -m "chore: write-test [skip ci]" || echo "nothing to commit"
+          git push
