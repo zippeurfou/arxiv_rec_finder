@@ -197,3 +197,6 @@ cython_debug/
 
 # Cache compaction temp files
 state/*.tmp
+
+# Repomix output (generated LLM context pack; not source)
+repomix-output.xml
