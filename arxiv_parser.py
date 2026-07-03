@@ -4,6 +4,9 @@ from io import BytesIO
 import requests
 from PyPDF2 import PdfReader
 
+PDF_TIMEOUT = 30
+UA = "arxiv-rec-finder/0.1 (+https://github.com/zippeurfou/arxiv_rec_finder)"
+
 
 def download_pdf(arxiv_id):
     """
@@ -12,7 +15,7 @@ def download_pdf(arxiv_id):
     base_id = arxiv_id.split("v")[0]  # strip version suffix
     pdf_url = f"https://arxiv.org/pdf/{base_id}.pdf"
     print(f"Downloading: {pdf_url}")
-    response = requests.get(pdf_url)
+    response = requests.get(pdf_url, timeout=PDF_TIMEOUT, headers={"User-Agent": UA})
     response.raise_for_status()
     return BytesIO(response.content)
 
