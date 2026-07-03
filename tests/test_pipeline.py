@@ -37,6 +37,24 @@ def test_collect_survives_category_fetch_failure(monkeypatch):
     assert [e.id for e in entries] == [good.id]
 
 
+def test_collect_all_categories_fail_returns_empty_and_logs_error(monkeypatch, caplog):
+    """Total arXiv outage: returns [] (no crash) but logs ERROR for alerting."""
+    import logging
+
+    config = {"search_query": "q", "arxiv_category": "cs.IR OR cs.LG"}
+
+    def fake_get(query, cat):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(M, "get_recent_arxiv_papers", fake_get)
+    with caplog.at_level(logging.ERROR):
+        entries = M.collect_new_arxiv_entries(config, seen_ids=set())
+    assert entries == []
+    assert any(
+        "all 2 arXiv categories failed" in r.getMessage() for r in caplog.records
+    )
+
+
 def test_process_entries_matches_from_cache(monkeypatch):
     domains = ["uber.com"]
     cache = {

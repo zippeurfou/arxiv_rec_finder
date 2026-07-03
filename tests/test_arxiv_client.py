@@ -9,17 +9,24 @@ def test_paced_get_raises_after_max_retries(monkeypatch):
     """Persistent 429s exhaust retries and raise RuntimeError (which callers now
     catch for graceful degradation)."""
 
+    calls = {"n": 0}
+
     class Resp429:
         status_code = 429
         content = b""
         headers = {}
         text = ""
 
-    monkeypatch.setattr(ac.requests, "get", lambda url, timeout, headers: Resp429())
+    def fake_get(url, timeout, headers):
+        calls["n"] += 1
+        return Resp429()
+
+    monkeypatch.setattr(ac.requests, "get", fake_get)
     monkeypatch.setattr(ac.time, "sleep", lambda s: None)  # no real backoff waits
     ac._reset_pacing_for_tests()
     with pytest.raises(RuntimeError):
         ac._paced_get("http://x/never")
+    assert calls["n"] == ac.MAX_RETRIES  # tried exactly MAX_RETRIES times
 
 
 def test_is_rate_limited_body():

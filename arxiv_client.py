@@ -57,11 +57,14 @@ def _paced_get(url: str) -> bytes:
             finally:
                 _last_request_ts = time.monotonic()
 
-        # exponential backoff, capped, so we ride out a rate-limit window
+        # exponential backoff, capped, so we ride out a rate-limit window.
+        # Skip the sleep on the last attempt (we're about to raise anyway).
         backoff = min(BACKOFF_CAP, MIN_INTERVAL_SEC * (2**attempt))
+        last_attempt = attempt == MAX_RETRIES - 1
         if err is not None:
             logging.warning(f"arXiv GET error (attempt {attempt + 1}): {err}")
-            time.sleep(backoff)
+            if not last_attempt:
+                time.sleep(backoff)
             continue
 
         if resp.status_code == 200 and not _is_rate_limited_body(resp.content):
@@ -72,8 +75,9 @@ def _paced_get(url: str) -> bytes:
             logging.warning(f"arXiv HTTP {resp.status_code}; backing off")
         else:
             resp.raise_for_status()
-        retry_after = int(resp.headers.get("Retry-After", 0) or 0)
-        time.sleep(max(retry_after, backoff))
+        if not last_attempt:
+            retry_after = int(resp.headers.get("Retry-After", 0) or 0)
+            time.sleep(max(retry_after, backoff))
     raise RuntimeError(f"arXiv API failed after {MAX_RETRIES} retries: {url}")
 
 

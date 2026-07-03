@@ -4,6 +4,7 @@ import os
 from datetime import date
 
 import feedparser
+import requests
 import yaml
 
 import arxiv_client as ac
@@ -163,9 +164,10 @@ def run(since, until=None, max_workers=6):
         try:
             for entry in iter_all(query, cat, lo, hi):
                 _process_entry(entry, cache, domains, seen, repo, token, processed_ids)
-        except Exception as e:
-            # Don't let a mid-window arXiv failure abort the other categories;
-            # the cache is checkpointed per paper, so re-running resumes.
+        except (RuntimeError, requests.RequestException) as e:
+            # Don't let a mid-window arXiv fetch failure abort the other categories;
+            # the cache is checkpointed per paper, so re-running resumes. Narrow
+            # catch so real bugs in _process_entry still surface loudly.
             logging.warning(f"category {cat} fetch failed mid-run: {e}; continuing")
             continue
 

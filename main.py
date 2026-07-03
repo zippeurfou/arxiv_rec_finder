@@ -3,6 +3,7 @@ import os
 from datetime import date
 from urllib.parse import urlparse
 
+import requests
 import yaml
 from tqdm import tqdm
 
@@ -50,14 +51,17 @@ def collect_new_arxiv_entries(config, seen_ids):
     new_entries = []
     seen_local = set()
 
+    failed = 0
     for cat in categories:
         try:
             recent = get_recent_arxiv_papers(tech_query, cat)
-        except Exception as e:
+        except (RuntimeError, requests.RequestException) as e:
             # A transient arXiv outage/rate-limit for one category must not crash
             # the whole daily run (retroactive re-decide, Substack, and the cache
             # commit still run; the next run recovers via the recent-window overlap).
+            # Narrow catch: real programming errors (KeyError, etc.) still surface.
             logging.warning(f"skipping category {cat}: arXiv fetch failed: {e}")
+            failed += 1
             continue
         for entry in tqdm(
             recent,
@@ -70,6 +74,15 @@ def collect_new_arxiv_entries(config, seen_ids):
             if entry.id not in seen_local:
                 new_entries.append(entry)
                 seen_local.add(entry.id)
+
+    if categories and failed == len(categories):
+        # Total outage: every category failed. Kept non-fatal (re-decide/Substack/
+        # cache commit still run), but logged at ERROR so a log monitor can alert
+        # rather than a silently-green job masking a multi-day arXiv outage.
+        logging.error(
+            "all %d arXiv categories failed to fetch (arXiv down or rate-limited)",
+            len(categories),
+        )
 
     return new_entries
 
