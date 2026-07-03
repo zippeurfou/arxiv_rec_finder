@@ -9,7 +9,8 @@ import requests
 USER_AGENT = "arxiv-rec-finder/0.1 (+https://github.com/zippeurfou/arxiv_rec_finder)"
 MIN_INTERVAL_SEC = 3.0  # arXiv TOU: <= 1 request / 3s to the API
 REQUEST_TIMEOUT = 30
-MAX_RETRIES = 5
+MAX_RETRIES = 6
+BACKOFF_CAP = 60  # max seconds to sleep between retries
 BASE_URL = "http://export.arxiv.org/api/query?"
 
 _pace_lock = threading.Lock()
@@ -56,9 +57,11 @@ def _paced_get(url: str) -> bytes:
             finally:
                 _last_request_ts = time.monotonic()
 
+        # exponential backoff, capped, so we ride out a rate-limit window
+        backoff = min(BACKOFF_CAP, MIN_INTERVAL_SEC * (2**attempt))
         if err is not None:
             logging.warning(f"arXiv GET error (attempt {attempt + 1}): {err}")
-            time.sleep((attempt + 1) * MIN_INTERVAL_SEC)
+            time.sleep(backoff)
             continue
 
         if resp.status_code == 200 and not _is_rate_limited_body(resp.content):
@@ -70,7 +73,7 @@ def _paced_get(url: str) -> bytes:
         else:
             resp.raise_for_status()
         retry_after = int(resp.headers.get("Retry-After", 0) or 0)
-        time.sleep(max(retry_after, (attempt + 1) * MIN_INTERVAL_SEC))
+        time.sleep(max(retry_after, backoff))
     raise RuntimeError(f"arXiv API failed after {MAX_RETRIES} retries: {url}")
 
 

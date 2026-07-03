@@ -1,6 +1,25 @@
 import time
 
+import pytest
+
 import arxiv_client as ac
+
+
+def test_paced_get_raises_after_max_retries(monkeypatch):
+    """Persistent 429s exhaust retries and raise RuntimeError (which callers now
+    catch for graceful degradation)."""
+
+    class Resp429:
+        status_code = 429
+        content = b""
+        headers = {}
+        text = ""
+
+    monkeypatch.setattr(ac.requests, "get", lambda url, timeout, headers: Resp429())
+    monkeypatch.setattr(ac.time, "sleep", lambda s: None)  # no real backoff waits
+    ac._reset_pacing_for_tests()
+    with pytest.raises(RuntimeError):
+        ac._paced_get("http://x/never")
 
 
 def test_is_rate_limited_body():

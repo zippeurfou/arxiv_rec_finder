@@ -16,6 +16,27 @@ class E:  # minimal feedparser-like entry
         return d
 
 
+def test_collect_survives_category_fetch_failure(monkeypatch):
+    """A transient arXiv failure for one category must not crash the run;
+    other categories still contribute (regression for the daily-job crash)."""
+    config = {"search_query": "q", "arxiv_category": "cs.IR OR cs.LG"}
+    good = E(
+        "http://arxiv.org/abs/2501.00001v1",
+        "ok",
+        "2025-01-01",
+        "http://arxiv.org/abs/2501.00001v1",
+    )
+
+    def fake_get(query, cat):
+        if cat == "cs.IR":
+            raise RuntimeError("arXiv API failed after 6 retries")
+        return [good]
+
+    monkeypatch.setattr(M, "get_recent_arxiv_papers", fake_get)
+    entries = M.collect_new_arxiv_entries(config, seen_ids=set())
+    assert [e.id for e in entries] == [good.id]
+
+
 def test_process_entries_matches_from_cache(monkeypatch):
     domains = ["uber.com"]
     cache = {

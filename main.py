@@ -51,7 +51,14 @@ def collect_new_arxiv_entries(config, seen_ids):
     seen_local = set()
 
     for cat in categories:
-        recent = get_recent_arxiv_papers(tech_query, cat)
+        try:
+            recent = get_recent_arxiv_papers(tech_query, cat)
+        except Exception as e:
+            # A transient arXiv outage/rate-limit for one category must not crash
+            # the whole daily run (retroactive re-decide, Substack, and the cache
+            # commit still run; the next run recovers via the recent-window overlap).
+            logging.warning(f"skipping category {cat}: arXiv fetch failed: {e}")
+            continue
         for entry in tqdm(
             recent,
             desc=f"Fetching arXiv ({cat})",
