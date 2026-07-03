@@ -1,3 +1,4 @@
+import filter_affiliations as fa
 from kb.extract import extract_paper, Extraction
 
 
@@ -40,3 +41,39 @@ def test_extract_paper_tolerates_wrapping():
     assert isinstance(e, Extraction)
     assert e.concepts_raw == ["cold-start"]
     assert e.technical_note == "N."
+
+
+def test_decide_companies_from_emails():
+    domains = ["meta.com", "uber.com"]
+    assert fa.decide_companies([], ["a@uber.com"], domains) == ["Uber"]
+    assert fa.decide_companies([], ["a@gmail.com"], domains) == []
+
+
+def test_decide_companies_from_affiliations():
+    domains = ["meta.com", "uber.com"]
+    assert fa.decide_companies(["meta ai research"], [], domains) == ["Meta"]
+
+
+def test_decide_companies_dedup_sorted():
+    domains = ["meta.com", "uber.com"]
+    got = fa.decide_companies(["meta"], ["x@uber.com", "y@meta.com"], domains)
+    assert got == ["Meta", "Uber"]
+
+
+def test_get_signals_uses_cache_no_download(monkeypatch):
+    called = {"n": 0}
+
+    def boom(_id):
+        called["n"] += 1
+        raise AssertionError("should not download when cached")
+
+    cache = {
+        "2603.06586": {
+            "arxiv_id": "2603.06586",
+            "affiliations": [],
+            "emails": ["x@uber.com"],
+        }
+    }
+    sig = fa.get_signals_cached("2603.06586", cache, pdf_email_fn=boom)
+    assert sig["emails"] == ["x@uber.com"]
+    assert called["n"] == 0

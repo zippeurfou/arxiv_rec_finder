@@ -88,3 +88,57 @@ def has_big_tech_author(entry, tech_domains, use_text=False):
             return True
 
     return False
+
+
+def _domain_patterns(tech_domains):
+    """Compile (alias, alias_pat, domain_pat, domain) tuples for each domain.
+
+    alias = domain without TLD (e.g. "meta" from "meta.com"). alias_pat is a
+    whole-word case-insensitive match; domain_pat matches the literal domain.
+    """
+    pats = []
+    for dom in tech_domains:
+        alias = dom.split(".")[0].lower()
+        pats.append(
+            (
+                alias,
+                re.compile(rf"\b{re.escape(alias)}\b", re.IGNORECASE),
+                re.compile(rf"(?<!\S){re.escape(dom)}(?!\S)", re.IGNORECASE),
+                dom,
+            )
+        )
+    return pats
+
+
+def decide_companies(affiliations, emails, tech_domains) -> list[str]:
+    """Pure verdict from cached signals + current domains. Returns sorted, de-duped
+    company aliases (Capitalized)."""
+    pats = _domain_patterns(tech_domains)
+    found = set()
+    for aff in affiliations or []:
+        for alias, alias_pat, dom_pat, _dom in pats:
+            if alias_pat.search(aff) or dom_pat.search(aff):
+                found.add(alias.capitalize())
+    for email in emails or []:
+        edom = email.split("@")[-1].lower()
+        for alias, _a, _d, dom in pats:
+            if edom == dom or edom.endswith(f".{dom}"):
+                found.add(alias.capitalize())
+    return sorted(found)
+
+
+def get_signals_cached(arxiv_id, cache, pdf_email_fn, affiliations=None):
+    """Return {'affiliations':[...], 'emails':[...]} for arxiv_id, using the cache
+    if present, else downloading via pdf_email_fn(arxiv_id) -> list[email]."""
+    if arxiv_id in cache:
+        rec = cache[arxiv_id]
+        return {
+            "affiliations": rec.get("affiliations", []),
+            "emails": rec.get("emails", []),
+        }
+    emails = []
+    try:
+        emails = pdf_email_fn(arxiv_id)
+    except Exception as e:
+        logging.warning(f"email extraction failed for {arxiv_id}: {e}")
+    return {"affiliations": list(affiliations or []), "emails": emails}
