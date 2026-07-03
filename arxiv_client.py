@@ -27,21 +27,37 @@ def _is_rate_limited_body(content: bytes) -> bool:
 
 
 def _paced_get(url: str) -> bytes:
-    """GET with >=MIN_INTERVAL_SEC spacing, timeout, and retry/backoff on
-    429/503 and arXiv's HTTP-200 'Rate exceeded.' soft-throttle."""
+    """GET the arXiv API with serial, single-connection access and
+    >=MIN_INTERVAL_SEC spacing between requests, plus timeout and retry/backoff
+    on 429/503 and arXiv's HTTP-200 'Rate exceeded.' soft-throttle.
+
+    The entire ``requests.get(...)`` happens while holding ``_pace_lock`` so that,
+    under concurrency, at most one arXiv API request is in flight at a time
+    (arXiv TOU: single connection at a time). Backoff ``sleep`` on retryable
+    errors runs *after* releasing the lock so a failing request never holds the
+    lock during its backoff.
+    """
     global _last_request_ts
     for attempt in range(MAX_RETRIES):
+        # Hold _pace_lock for the whole request so at most one arXiv API call is
+        # in flight at a time; release it before any backoff sleep below.
         with _pace_lock:
             wait = MIN_INTERVAL_SEC - (time.monotonic() - _last_request_ts)
             if wait > 0:
                 time.sleep(wait)
-            _last_request_ts = time.monotonic()
-        try:
-            resp = requests.get(
-                url, timeout=REQUEST_TIMEOUT, headers={"User-Agent": USER_AGENT}
-            )
-        except requests.RequestException as e:
-            logging.warning(f"arXiv GET error (attempt {attempt + 1}): {e}")
+            try:
+                resp = requests.get(
+                    url, timeout=REQUEST_TIMEOUT, headers={"User-Agent": USER_AGENT}
+                )
+                err = None
+            except requests.RequestException as e:
+                resp = None
+                err = e
+            finally:
+                _last_request_ts = time.monotonic()
+
+        if err is not None:
+            logging.warning(f"arXiv GET error (attempt {attempt + 1}): {err}")
             time.sleep((attempt + 1) * MIN_INTERVAL_SEC)
             continue
 
@@ -63,6 +79,7 @@ def _build_query(query, category, start, max_results, since=None, until=None):
     if since or until:
         lo = since or "197001010000"
         hi = until or "299912312359"
+        # requests percent-encodes the [ ] on the wire; arXiv accepts both forms.
         parts.append(f"submittedDate:[{lo}+TO+{hi}]")
     search = "+AND+".join(parts)
     return (
