@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   issues: write
 
 jobs:
@@ -40,3 +40,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: uv run python main.py
+
+      - name: Commit cache updates
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -f state/email_cache.jsonl ]; then
+            git add state/email_cache.jsonl
+            git commit -m "chore: update email cache [skip ci]" || echo "no cache changes"
+            git push || echo "nothing to push"
+          else
+            echo "no cache file to commit"
+          fi
