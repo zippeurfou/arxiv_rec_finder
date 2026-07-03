@@ -77,3 +77,31 @@ def test_get_signals_uses_cache_no_download(monkeypatch):
     sig = fa.get_signals_cached("2603.06586", cache, pdf_email_fn=boom)
     assert sig["emails"] == ["x@uber.com"]
     assert called["n"] == 0
+
+
+def test_get_signals_cache_miss_calls_pdf_fn():
+    sig = fa.get_signals_cached(
+        "2603.06586",
+        {},
+        pdf_email_fn=lambda aid: ["a@meta.com"],
+        affiliations=["Meta AI"],
+    )
+    assert sig["emails"] == ["a@meta.com"]
+    assert sig["affiliations"] == ["Meta AI"]
+
+
+def test_get_signals_cache_miss_pdf_fn_raises_returns_empty():
+    def boom(_id):
+        raise RuntimeError("download failed")
+
+    sig = fa.get_signals_cached("2603.06586", {}, pdf_email_fn=boom)
+    assert sig["emails"] == []
+    assert sig["affiliations"] == []
+
+
+def test_decide_companies_email_subdomain_match():
+    assert fa.decide_companies([], ["x@research.meta.com"], ["meta.com"]) == ["Meta"]
+
+
+def test_decide_companies_alias_case_insensitive():
+    assert fa.decide_companies(["Meta AI Research"], [], ["meta.com"]) == ["Meta"]
