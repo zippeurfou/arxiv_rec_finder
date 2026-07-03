@@ -1,19 +1,24 @@
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from urllib.parse import urlparse
 
 import yaml
 from tqdm import tqdm
 
 from arxiv_client import get_recent_arxiv_papers
-from filter_affiliations import has_big_tech_author
+from arxiv_parser import extract_emails_from_arxiv_pdf
+from cache import append_record, load_cache
+from filter_affiliations import decide_companies, get_signals_cached
+from kb.ids import extract_arxiv_id
 from notifier import create_issue
 from store import load_seen_from_issues
 from substack_client import fetch_substack_posts, get_substack_domains
 from summarizer import summarize_with_ollama
 
 logging.basicConfig(level=logging.INFO)
+
+CACHE_PATH = "state/email_cache.jsonl"
 
 
 class FakeEntry:
@@ -58,38 +63,26 @@ def collect_new_arxiv_entries(config, seen_ids):
     return new_entries
 
 
-def submit_arxiv_issues(entries, config, seen_ids, repo, token):
+def process_entries(
+    entries, tech_domains, cache, seen_ids, repo, token, cache_path, download=True
+):
     """
-    Check affiliations for entries in parallel, then for those with big-tech
-    authors, summarize sequentially and create issues.
+    Decide each entry using cached signals (downloading + caching if missing),
+    then file GitHub issues for matches that haven't been seen yet.
+
+    For every entry:
+      - skip if its raw id is already in `seen_ids`
+      - normalize to an arXiv id and get signals from the cache (or download the
+        PDF via `extract_emails_from_arxiv_pdf` unless `download=False`)
+      - on a cache miss while downloading, build + store a cache record and
+        checkpoint it to `cache_path` (if provided)
+      - decide companies from the signals; if matched and not already seen,
+        set `entry.companies`, summarize, create an issue, and mark it seen.
     """
-    tech_domains = config["tech_domains"]
-
-    entries_to_check = [entry for entry in entries if entry.id not in seen_ids]
-    valid_entries = []
-
-    with ThreadPoolExecutor() as executor:
-        # Submit all tasks
-        tasks = [
-            (entry, executor.submit(has_big_tech_author, entry, tech_domains))
-            for entry in entries_to_check
-        ]
-
-        # Collect results
-        for entry, future in tqdm(
-            tasks,
-            desc="Checking affiliations",
-            unit="paper",
-            leave=False,
-        ):
-            try:
-                if future.result():
-                    valid_entries.append(entry)
-            except Exception as e:
-                logging.warning(f"Error checking affiliation for {entry.id}: {e}")
+    pdf_fn = extract_emails_from_arxiv_pdf if download else (lambda _i: [])
 
     for entry in tqdm(
-        valid_entries,
+        entries,
         desc="Processing new arXiv papers",
         unit="paper",
         leave=False,
@@ -97,11 +90,64 @@ def submit_arxiv_issues(entries, config, seen_ids, repo, token):
         if entry.id in seen_ids:
             continue
 
-        # Summarize with Ollama sequentially given Ollama is ressource-intensive
-        # TODO: Consider not using an LLM to make this faster but it is too fun to do it on a github workflow :D
-        summary = summarize_with_ollama(entry.title, entry.summary)
-        create_issue(repo, token, entry, summary)
-        logging.info(f"✅ Issue for arXiv paper: {entry.title}")
+        aid = extract_arxiv_id(entry.id) or entry.id
+        sig = get_signals_cached(aid, cache, pdf_fn)
+
+        if aid not in cache and download:
+            rec = {
+                "arxiv_id": aid,
+                "title": entry.title,
+                "published": entry.published,
+                "url": entry.link,
+                "affiliations": sig["affiliations"],
+                "emails": sig["emails"],
+                "checked": date.today().isoformat(),
+            }
+            cache[aid] = rec
+            if cache_path:
+                append_record(cache_path, rec)
+
+        companies = decide_companies(sig["affiliations"], sig["emails"], tech_domains)
+        if companies and entry.link not in seen_ids:
+            entry.companies = companies
+            summary = summarize_with_ollama(entry.title, getattr(entry, "summary", ""))
+            create_issue(repo, token, entry, summary)
+            seen_ids.add(entry.link)
+            logging.info(f"✅ Issue for arXiv paper: {entry.title}")
+
+
+def redecide_cache(cache, tech_domains, seen_ids, repo, token):
+    """
+    Retroactively file issues for cached papers that now match current domains.
+
+    Re-decides every cached record against `tech_domains` (no re-download). For
+    matches whose URL hasn't been seen, builds a FakeEntry from cached metadata,
+    summarizes, files an issue, and marks the URL seen.
+    """
+    for aid, rec in tqdm(
+        cache.items(),
+        desc="Re-deciding cache",
+        unit="paper",
+        leave=False,
+    ):
+        url = rec.get("url")
+        if not url or url in seen_ids:
+            continue
+        companies = decide_companies(
+            rec.get("affiliations", []), rec.get("emails", []), tech_domains
+        )
+        if companies:
+            fe = FakeEntry(
+                id=url,
+                title=rec.get("title", aid),
+                published=rec.get("published", ""),
+                link=url,
+                companies=companies,
+            )
+            summary = summarize_with_ollama(fe.title, "")
+            create_issue(repo, token, fe, summary)
+            seen_ids.add(url)
+            logging.info(f"✅ Retroactive issue for cached paper: {fe.title}")
 
 
 def process_substack_users(config, seen_ids, repo, token):
@@ -162,13 +208,21 @@ def main():
     # 1) Fetch all already-seen URLs from GitHub issues
     seen_ids = load_seen_from_issues(repo, token)
 
-    # 2) Collect new arXiv entries (skip ones already in seen_ids)
-    new_arxiv = collect_new_arxiv_entries(config, seen_ids)
+    # 2) Load the persisted extraction cache (arxiv_id -> signals + metadata)
+    cache = load_cache(CACHE_PATH)
 
-    # 3) Submit issues for eligible arXiv papers
-    submit_arxiv_issues(new_arxiv, config, seen_ids, repo, token)
+    # 3) Collect new arXiv entries (skip ones already in seen_ids)
+    new = collect_new_arxiv_entries(config, seen_ids)
 
-    # 4) Process Substack posts
+    # 4) Decide + file issues for new entries, caching downloaded signals
+    process_entries(
+        new, config["tech_domains"], cache, seen_ids, repo, token, CACHE_PATH
+    )
+
+    # 5) Retroactively re-decide the whole cache against current domains
+    redecide_cache(cache, config["tech_domains"], seen_ids, repo, token)
+
+    # 6) Process Substack posts
     process_substack_users(config, seen_ids, repo, token)
 
 
