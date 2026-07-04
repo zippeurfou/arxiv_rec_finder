@@ -73,11 +73,32 @@ git checkout -- uv.lock             # drop the private-index rewrite uv made
 git status -s                       # sanity: only state/email_cache.jsonl should matter
 git add state/email_cache.jsonl     # NEVER `git add -A`
 git commit -m "chore: seed email cache from <window> backfill"
+git pull --rebase origin main       # integrate any concurrent daily-bot cache commit
 git push
 ```
 
 No manual `compact` needed — the file is one line per paper, and the daily Action
 compacts it on its next run.
+
+**Safe push — never `git push --force`.** The daily bot may commit the cache while a
+local backfill runs; a force-push would DROP its cached papers. If `git push` is
+rejected, or `git pull --rebase` conflicts on `state/email_cache.jsonl`, reconcile by
+UNION — the cache is dedup-by-`arxiv_id`, so concatenating both sides and compacting is
+lossless:
+
+```bash
+git rebase --abort 2>/dev/null || true      # if a rebase is mid-conflict
+git fetch origin main
+git show origin/main:state/email_cache.jsonl > /tmp/remote_cache.jsonl
+cat /tmp/remote_cache.jsonl state/email_cache.jsonl > /tmp/union.jsonl
+mv /tmp/union.jsonl state/email_cache.jsonl
+uv run python -c "import cache; cache.compact('state/email_cache.jsonl')"  # dedup+sort
+git checkout -- uv.lock
+git reset --soft origin/main                # linear: sit on latest remote (cache is all we commit)
+git add state/email_cache.jsonl
+git commit -m "chore: union backfill cache with remote"
+git push
+```
 
 ## Verify a completed run
 
