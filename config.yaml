@@ -19,6 +19,7 @@ tech_domains:
   - doordash.com
   - uber.com
   - airbnb.com
+  - booking.com
   - twitter.com
   - linkedin.com
   - pinterest.com
@@ -31,7 +32,7 @@ tech_domains:
   - alibaba-inc.com
   - alphabet.com
   - meituan.com
-  - tik-tok.com
+  - tiktok.com
   - taobao.com
   - jd.com
   - tmall.com
@@ -40,9 +41,11 @@ tech_domains:
   - instagram.com
   - instacart.com
   - outbrain.com
+  - criteo.com
   - quora.com
   - bbc.com
   - walmart.com
+  - ebay.com
   - otto.de
   - zalando.de
 
