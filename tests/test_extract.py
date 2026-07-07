@@ -1,3 +1,7 @@
+from pathlib import Path
+
+import yaml
+
 import filter_affiliations as fa
 from kb.extract import extract_paper, Extraction
 
@@ -105,3 +109,33 @@ def test_decide_companies_email_subdomain_match():
 
 def test_decide_companies_alias_case_insensitive():
     assert fa.decide_companies(["Meta AI Research"], [], ["meta.com"]) == ["Meta"]
+
+
+def test_decide_companies_yandex_team_domain_normalizes_to_yandex():
+    # Yandex publishes from the internal yandex-team.ru domain; the label must
+    # normalize to "Yandex", not the raw first-label component "Yandex-team".
+    assert fa.decide_companies([], ["x@yandex-team.ru"], ["yandex-team.ru"]) == [
+        "Yandex"
+    ]
+
+
+def test_config_catches_yandex_papers():
+    # Regression guard: config must allowlist Yandex's real publishing domains
+    # (yandex.ru + internal yandex-team.ru), not just the public yandex.com,
+    # and both must collapse to a single "Yandex" label.
+    config_path = Path(__file__).resolve().parent.parent / "config.yaml"
+    with open(config_path) as f:
+        domains = yaml.safe_load(f)["tech_domains"]
+    assert "yandex-team.ru" in domains
+    assert "yandex.ru" in domains
+    # Real signals from arXiv 2606.08604 (Gryphon, Yandex): 1 corp email + gmails.
+    gryphon_emails = [
+        "daria.m.tikhonovich@gmail.com",
+        "ilyamurzin@yandex-team.ru",
+        "olegsorokin.ai@gmail.com",
+    ]
+    assert fa.decide_companies([], gryphon_emails, domains) == ["Yandex"]
+    # A paper carrying both domains must dedup to a single label.
+    assert fa.decide_companies([], ["a@yandex.ru", "b@yandex-team.ru"], domains) == [
+        "Yandex"
+    ]

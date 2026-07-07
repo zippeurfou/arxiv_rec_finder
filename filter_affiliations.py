@@ -3,6 +3,24 @@ import re
 
 from arxiv_parser import extract_emails_from_arxiv_pdf
 
+# Some companies publish from a secondary or internal domain whose first label
+# component isn't the company name (e.g. Yandex uses the public yandex.ru and the
+# internal yandex-team.ru). Map those to a canonical display alias so all of a
+# company's domains collapse to a single label.
+_DOMAIN_ALIAS = {
+    "yandex-team.ru": "yandex",
+    # Not exhaustive: other multi-domain companies (e.g. alibaba-inc.com,
+    # taobao.com, tmall.com) still fragment into separate labels. Add entries as
+    # needed; if this map grows large, promote it to config.yaml.
+}
+
+
+def _alias_for(dom):
+    """Display alias (lowercase) for a tech domain: an explicit _DOMAIN_ALIAS
+    override if present, else the first dotted component (e.g. "meta.com" ->
+    "meta")."""
+    return _DOMAIN_ALIAS.get(dom.lower(), dom.split(".")[0].lower())
+
 
 def extract_affiliations(entry):
     """
@@ -45,7 +63,7 @@ def has_big_tech_author(entry, tech_domains, use_text=False):
     #   but we include it in case someone wrote "Meta.com" in their affiliation.
     patterns = []
     for dom in tech_domains:
-        alias = dom.split(".")[0].lower()
+        alias = _alias_for(dom)
         alias_pat = re.compile(rf"\b{re.escape(alias)}\b", re.IGNORECASE)
         domain_pat = re.compile(rf"(?<!\S){re.escape(dom)}(?!\S)", re.IGNORECASE)
         patterns.append((dom, alias, alias_pat, domain_pat))
@@ -98,7 +116,7 @@ def _domain_patterns(tech_domains):
     """
     pats = []
     for dom in tech_domains:
-        alias = dom.split(".")[0].lower()
+        alias = _alias_for(dom)
         pats.append(
             (
                 alias,
